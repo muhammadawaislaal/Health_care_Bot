@@ -142,8 +142,8 @@ if 'analyze_clicked' not in st.session_state:
     st.session_state.analyze_clicked = False
 
 class MedicalAIAnalyzer:
-    def __init__(self, groq_client=None):
-        self.groq_client = groq_client
+    def __init__(self, api_key=None):
+        self.api_key = api_key
         self.medical_knowledge_base = self._initialize_medical_knowledge()
     
     def _initialize_medical_knowledge(self):
@@ -167,10 +167,38 @@ class MedicalAIAnalyzer:
             }
         }
 
+    def call_groq_api(self, messages, model="llama3-70b-8192", max_tokens=1500, temperature=0.3):
+        """Make direct API call to Groq"""
+        if not self.api_key:
+            return None
+        
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "messages": messages,
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": 0.9,
+            "stream": False
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error(f"Groq API call failed: {str(e)}")
+            return None
+
     def chat_with_medical_ai(self, message, conversation_history=None, patient_context=None):
         """Advanced medical chat using Groq API"""
-        if not self.groq_client:
-            return "🚫 **Medical AI Service Unavailable**\n\nPlease configure Groq API key in the sidebar to enable AI-powered medical conversations."
+        if not self.api_key:
+            return "🚫 **Medical AI Service Unavailable**\n\nPlease configure Groq API key in Streamlit secrets to enable AI-powered medical conversations."
         
         try:
             # Build system prompt with medical context
@@ -228,25 +256,21 @@ class MedicalAIAnalyzer:
             # Add current user message
             messages.append({"role": "user", "content": message})
 
-            # Get response from Groq
-            response = self.groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=1500,
-                top_p=0.9,
-                stream=False
-            )
-
-            return response.choices[0].message.content
+            # Get response from Groq API
+            response = self.call_groq_api(messages)
+            
+            if response:
+                return response
+            else:
+                return "⚠️ **I'm experiencing technical difficulties**\n\nPlease try again in a moment or check your API configuration."
 
         except Exception as e:
-            logger.error(f"Groq API error: {str(e)}")
-            return f"⚠️ **I'm experiencing technical difficulties**\n\nError: {str(e)}\n\nPlease try again in a moment or check your API configuration."
+            logger.error(f"Medical AI error: {str(e)}")
+            return f"⚠️ **I'm experiencing technical difficulties**\n\nError: {str(e)}\n\nPlease try again in a moment."
 
     def analyze_lab_results(self, lab_data):
         """AI-powered laboratory results analysis"""
-        if not self.groq_client:
+        if not self.api_key:
             return self._basic_lab_analysis(lab_data)
         
         try:
@@ -268,19 +292,21 @@ class MedicalAIAnalyzer:
             Format this as a professional medical consultation note.
             """
 
-            response = self.groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are a senior pathologist and medical consultant. Provide accurate, professional laboratory analysis with clear clinical correlations and actionable recommendations. Always emphasize patient safety."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                max_tokens=2000
-            )
-            return response.choices[0].message.content
+            messages = [
+                {
+                    "role": "system", 
+                    "content": "You are a senior pathologist and medical consultant. Provide accurate, professional laboratory analysis with clear clinical correlations and actionable recommendations. Always emphasize patient safety."
+                },
+                {"role": "user", "content": prompt}
+            ]
+
+            response = self.call_groq_api(messages, max_tokens=2000, temperature=0.2)
+            
+            if response:
+                return response
+            else:
+                return self._basic_lab_analysis(lab_data)
+                
         except Exception as e:
             logger.error(f"AI lab analysis failed: {str(e)}")
             return self._basic_lab_analysis(lab_data)
@@ -314,7 +340,7 @@ class MedicalAIAnalyzer:
     
     def analyze_medical_image(self, image_description):
         """AI-powered medical image analysis"""
-        if not self.groq_client:
+        if not self.api_key:
             return self._basic_image_analysis(image_description)
         
         try:
@@ -335,19 +361,21 @@ class MedicalAIAnalyzer:
             Format this as a standard radiology report.
             """
 
-            response = self.groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are a board-certified radiologist with extensive experience. Provide detailed, professional image interpretation following standard radiology reporting protocols. Always recommend formal radiology consultation for definitive interpretation."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                max_tokens=1800
-            )
-            return response.choices[0].message.content
+            messages = [
+                {
+                    "role": "system", 
+                    "content": "You are a board-certified radiologist with extensive experience. Provide detailed, professional image interpretation following standard radiology reporting protocols. Always recommend formal radiology consultation for definitive interpretation."
+                },
+                {"role": "user", "content": prompt}
+            ]
+
+            response = self.call_groq_api(messages, max_tokens=1800, temperature=0.2)
+            
+            if response:
+                return response
+            else:
+                return self._basic_image_analysis(image_description)
+                
         except Exception as e:
             logger.error(f"AI image analysis failed: {str(e)}")
             return self._basic_image_analysis(image_description)
@@ -371,7 +399,7 @@ class MedicalAIAnalyzer:
     
     def generate_patient_summary(self, patient_info, medical_history, current_findings):
         """AI-powered comprehensive patient summary"""
-        if not self.groq_client:
+        if not self.api_key:
             return self._basic_patient_summary(patient_info, medical_history, current_findings)
         
         try:
@@ -408,19 +436,21 @@ class MedicalAIAnalyzer:
             Format as a professional clinical note.
             """
 
-            response = self.groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are an experienced physician creating comprehensive patient care plans. Focus on evidence-based, practical recommendations with clear follow-up actions. Always emphasize the importance of professional medical follow-up."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                max_tokens=2500
-            )
-            return response.choices[0].message.content
+            messages = [
+                {
+                    "role": "system", 
+                    "content": "You are an experienced physician creating comprehensive patient care plans. Focus on evidence-based, practical recommendations with clear follow-up actions. Always emphasize the importance of professional medical follow-up."
+                },
+                {"role": "user", "content": prompt}
+            ]
+
+            response = self.call_groq_api(messages, max_tokens=2500, temperature=0.2)
+            
+            if response:
+                return response
+            else:
+                return self._basic_patient_summary(patient_info, medical_history, current_findings)
+                
         except Exception as e:
             logger.error(f"AI patient summary failed: {str(e)}")
             return self._basic_patient_summary(patient_info, medical_history, current_findings)
@@ -472,27 +502,34 @@ def setup_groq_api():
     # Check if API key is in Streamlit secrets
     if 'GROQ_API_KEY' in st.secrets:
         api_key = st.secrets['GROQ_API_KEY']
+        
+        # Test the API key with a simple request
         try:
-            # Import Groq here to avoid issues
-            from groq import Groq
-            groq_client = Groq(api_key=api_key)
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "messages": [{"role": "user", "content": "Say 'Connected'"}],
+                "model": "llama3-8b-8192",
+                "max_tokens": 5
+            }
             
-            # Test the connection with a simple request
-            test_response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",  # Use smaller model for test
-                messages=[{"role": "user", "content": "Say 'Connected'"}],
-                max_tokens=5
-            )
+            response = requests.post(url, headers=headers, json=data, timeout=10)
             
-            st.session_state.groq_client = groq_client
-            st.session_state.api_configured = True
-            st.sidebar.markdown("<div class='api-status-connected'>✅ Groq API Connected (from secrets)</div>", unsafe_allow_html=True)
-            return groq_client
-            
+            if response.status_code == 200:
+                st.session_state.api_configured = True
+                st.session_state.api_key = api_key
+                st.sidebar.markdown("<div class='api-status-connected'>✅ Groq API Connected (from secrets)</div>", unsafe_allow_html=True)
+                return api_key
+            else:
+                st.sidebar.markdown("<div class='api-status-disconnected'>❌ Groq API Error</div>", unsafe_allow_html=True)
+                st.sidebar.error(f"API returned status: {response.status_code}")
+                
         except Exception as e:
             st.sidebar.markdown("<div class='api-status-disconnected'>❌ Groq API Error</div>", unsafe_allow_html=True)
-            st.sidebar.error(f"Error details: {str(e)}")
-            st.sidebar.info("Please check your API key and try again.")
+            st.sidebar.error(f"Connection failed: {str(e)}")
     
     else:
         st.sidebar.markdown("<div class='api-status-disconnected'>❌ Groq API Not Configured</div>", unsafe_allow_html=True)
@@ -772,10 +809,10 @@ def main():
     st.markdown("<h2 class='sub-header'>Advanced AI-Powered Medical Assistant</h2>", unsafe_allow_html=True)
     
     # Setup Groq API
-    groq_client = setup_groq_api()
+    api_key = setup_groq_api()
     
-    # Initialize analyzer with Groq client
-    analyzer = MedicalAIAnalyzer(groq_client)
+    # Initialize analyzer with API key
+    analyzer = MedicalAIAnalyzer(api_key)
     
     # Setup sidebar and get patient data
     patient_data = setup_sidebar()
