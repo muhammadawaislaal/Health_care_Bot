@@ -16,12 +16,6 @@ from datetime import datetime
 import logging
 import re
 
-try:
-    import groq
-    GROQ_AVAILABLE = True
-except ImportError:
-    GROQ_AVAILABLE = False
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -475,49 +469,34 @@ def setup_groq_api():
     """Setup Groq API configuration"""
     st.sidebar.header("🔑 API Configuration")
     
-    if not GROQ_AVAILABLE:
-        st.sidebar.error("❌ Groq library not installed. Please install it using: pip install groq")
-        return None
-    
     # Check if API key is in Streamlit secrets
     if 'GROQ_API_KEY' in st.secrets:
         api_key = st.secrets['GROQ_API_KEY']
         try:
-            groq_client = groq.Groq(api_key=api_key)
-            # Test the connection
+            # Import Groq here to avoid issues
+            from groq import Groq
+            groq_client = Groq(api_key=api_key)
+            
+            # Test the connection with a simple request
             test_response = groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[{"role": "user", "content": "Test"}],
+                model="llama3-8b-8192",  # Use smaller model for test
+                messages=[{"role": "user", "content": "Say 'Connected'"}],
                 max_tokens=5
             )
+            
             st.session_state.groq_client = groq_client
             st.session_state.api_configured = True
             st.sidebar.markdown("<div class='api-status-connected'>✅ Groq API Connected (from secrets)</div>", unsafe_allow_html=True)
             return groq_client
+            
         except Exception as e:
             st.sidebar.markdown("<div class='api-status-disconnected'>❌ Groq API Error</div>", unsafe_allow_html=True)
-            st.sidebar.error(f"Error: {str(e)}")
+            st.sidebar.error(f"Error details: {str(e)}")
+            st.sidebar.info("Please check your API key and try again.")
     
-    # Manual input as fallback
-    st.sidebar.info("Enter Groq API Key manually if not in secrets:")
-    manual_api_key = st.sidebar.text_input("Groq API Key:", type="password", key="manual_groq_key")
-    
-    if manual_api_key:
-        if st.sidebar.button("Connect API", key="connect_manual"):
-            try:
-                groq_client = groq.Groq(api_key=manual_api_key)
-                # Test the connection
-                test_response = groq_client.chat.completions.create(
-                    model="llama3-70b-8192",
-                    messages=[{"role": "user", "content": "Test"}],
-                    max_tokens=5
-                )
-                st.session_state.groq_client = groq_client
-                st.session_state.api_configured = True
-                st.sidebar.success("✅ Groq API Connected Successfully!")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"❌ Connection failed: {str(e)}")
+    else:
+        st.sidebar.markdown("<div class='api-status-disconnected'>❌ Groq API Not Configured</div>", unsafe_allow_html=True)
+        st.sidebar.info("Please add GROQ_API_KEY to your Streamlit secrets.")
     
     return None
 
