@@ -14,6 +14,11 @@ import pdfplumber
 import docx
 import tempfile
 from datetime import datetime
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configure the page for cloud deployment
 st.set_page_config(
@@ -34,43 +39,81 @@ if 'uploaded_files' not in st.session_state:
     st.session_state.uploaded_files = []
 if 'api_key_configured' not in st.session_state:
     st.session_state.api_key_configured = False
+if 'chatbot' not in st.session_state:
+    st.session_state.chatbot = None
 
 class MedicalChatbot:
     def __init__(self, api_key=None):
-        if api_key:
+        self.api_key = api_key
+        self.client_configured = False
+        
+        if api_key and api_key.startswith('sk-'):
             try:
+                # Configure OpenAI with the API key
+                openai.api_key = api_key
                 self.client = openai.OpenAI(api_key=api_key)
-                self.api_key = api_key
                 self.client_configured = True
-                st.sidebar.success("✅ OpenAI client configured successfully!")
+                logger.info("OpenAI client configured successfully")
             except Exception as e:
-                st.sidebar.error(f"❌ Error configuring OpenAI: {str(e)}")
+                logger.error(f"Error configuring OpenAI: {str(e)}")
                 self.client_configured = False
+                st.error(f"❌ Error configuring OpenAI: {str(e)}")
         else:
             self.client_configured = False
-            self.api_key = None
     
     def extract_text_from_pdf(self, pdf_file):
         """Extract text from PDF files"""
         try:
             text = ""
-            with pdfplumber.open(pdf_file) as pdf:
+            # Create a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(pdf_file.getvalue())
+                tmp_file_path = tmp_file.name
+            
+            with pdfplumber.open(tmp_file_path) as pdf:
                 for page in pdf.pages:
-                    text += page.extract_text() + "\n"
-            return text
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+            
+            # Clean up temporary file
+            os.unlink(tmp_file_path)
+            return text if text else "No text could be extracted from PDF"
         except Exception as e:
+            logger.error(f"PDF extraction error: {str(e)}")
             return f"Error extracting PDF: {str(e)}"
     
     def extract_text_from_docx(self, docx_file):
         """Extract text from DOCX files"""
         try:
-            doc = docx.Document(docx_file)
+            # Create a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
+                tmp_file.write(docx_file.getvalue())
+                tmp_file_path = tmp_file.name
+            
+            doc = docx.Document(tmp_file_path)
             text = ""
             for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
-            return text
+                if paragraph.text:
+                    text += paragraph.text + "\n"
+            
+            # Clean up temporary file
+            os.unlink(tmp_file_path)
+            return text if text else "No text could be extracted from DOCX"
         except Exception as e:
+            logger.error(f"DOCX extraction error: {str(e)}")
             return f"Error extracting DOCX: {str(e)}"
+    
+    def extract_text_from_file(self, file):
+        """Extract text from various file types"""
+        if file.type == "application/pdf":
+            return self.extract_text_from_pdf(file)
+        elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            return self.extract_text_from_docx(file)
+        elif file.type == "text/plain":
+            return str(file.read(), 'utf-8')
+        else:
+            return f"Unsupported file type: {file.type}"
     
     def analyze_lab_results(self, lab_data):
         """Analyze laboratory test results"""
@@ -106,9 +149,10 @@ class MedicalChatbot:
             
             return response.choices[0].message.content
         except Exception as e:
+            logger.error(f"Lab analysis error: {str(e)}")
             return f"Error analyzing lab results: {str(e)}"
     
-    def analyze_medical_image(self, image_file, image_description=""):
+    def analyze_medical_image(self, image_description=""):
         """Analyze medical images with description"""
         if not self.client_configured:
             return "Please configure API key first"
@@ -142,9 +186,10 @@ class MedicalChatbot:
             
             return response.choices[0].message.content
         except Exception as e:
+            logger.error(f"Image analysis error: {str(e)}")
             return f"Error analyzing image: {str(e)}"
     
-    def analyze_medical_report(self, report_text, report_type):
+    def analyze_medical_report(self, report_text, report_type="Clinical"):
         """Analyze various medical reports"""
         if not self.client_configured:
             return "Please configure API key first"
@@ -176,6 +221,7 @@ class MedicalChatbot:
             
             return response.choices[0].message.content
         except Exception as e:
+            logger.error(f"Report analysis error: {str(e)}")
             return f"Error analyzing report: {str(e)}"
     
     def generate_patient_summary(self, patient_info, medical_history, current_findings):
@@ -226,6 +272,7 @@ class MedicalChatbot:
             
             return response.choices[0].message.content
         except Exception as e:
+            logger.error(f"Patient summary error: {str(e)}")
             return f"Error generating summary: {str(e)}"
     
     def chat_response(self, messages):
@@ -234,39 +281,45 @@ class MedicalChatbot:
             return "Please configure API key first to use the chat feature."
         
         try:
+            system_message = {
+                "role": "system", 
+                "content": """You are Dr. MedAI, an AI medical assistant for healthcare professionals. 
+
+                YOUR ROLE:
+                - Provide evidence-based medical information
+                - Assist with clinical decision support
+                - Help interpret medical data and reports
+                - Suggest differential diagnoses
+                - Recommend diagnostic pathways
+                - Always emphasize consulting specialists for complex cases
+
+                COMMUNICATION STYLE:
+                - Professional and precise
+                - Empathetic but clinical
+                - Clear and structured responses
+                - Cite medical evidence when possible
+                - Acknowledge limitations of AI in medicine
+
+                SAFETY PROTOCOLS:
+                - Never provide definitive diagnoses
+                - Always recommend human physician review
+                - Highlight urgent findings that need immediate attention
+                - Suggest appropriate specialist consultations
+                """
+            }
+            
+            chat_messages = [system_message] + [{"role": m["role"], "content": m["content"]} for m in messages]
+            
             response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": """You are Dr. MedAI, an AI medical assistant for healthcare professionals. 
-
-                    YOUR ROLE:
-                    - Provide evidence-based medical information
-                    - Assist with clinical decision support
-                    - Help interpret medical data and reports
-                    - Suggest differential diagnoses
-                    - Recommend diagnostic pathways
-                    - Always emphasize consulting specialists for complex cases
-
-                    COMMUNICATION STYLE:
-                    - Professional and precise
-                    - Empathetic but clinical
-                    - Clear and structured responses
-                    - Cite medical evidence when possible
-                    - Acknowledge limitations of AI in medicine
-
-                    SAFETY PROTOCOLS:
-                    - Never provide definitive diagnoses
-                    - Always recommend human physician review
-                    - Highlight urgent findings that need immediate attention
-                    - Suggest appropriate specialist consultations
-                    """}
-                ] + [{"role": m["role"], "content": m["content"]} for m in messages],
+                messages=chat_messages,
                 temperature=0.3,
                 max_tokens=1500
             )
             
             return response.choices[0].message.content
         except Exception as e:
+            logger.error(f"Chat error: {str(e)}")
             return f"Error in chat: {str(e)}"
 
 def setup_api_configuration():
@@ -278,20 +331,29 @@ def setup_api_configuration():
         api_key = st.secrets['OPENAI_API_KEY']
         if api_key and api_key.startswith('sk-'):
             st.sidebar.success("✅ API key loaded from Streamlit secrets!")
+            
+            # Initialize chatbot if not already done
+            if st.session_state.chatbot is None or not st.session_state.chatbot.client_configured:
+                st.session_state.chatbot = MedicalChatbot(api_key)
+            
             return api_key
     
     # Option 2: Manual input as fallback
     st.sidebar.info("Configure your OpenAI API key")
-    api_key = st.sidebar.text_input("Enter OpenAI API Key:", type="password")
+    api_key = st.sidebar.text_input("Enter OpenAI API Key:", type="password", key="api_key_input")
     
     if api_key:
-        if st.sidebar.button("Save API Key"):
+        if st.sidebar.button("Save API Key", key="save_api_key"):
             if api_key.startswith('sk-'):
-                st.session_state.api_key_configured = True
-                st.sidebar.success("API key configured!")
-                return api_key
+                st.session_state.chatbot = MedicalChatbot(api_key)
+                if st.session_state.chatbot.client_configured:
+                    st.session_state.api_key_configured = True
+                    st.sidebar.success("✅ API key configured successfully!")
+                    st.rerun()
+                else:
+                    st.sidebar.error("❌ Failed to configure OpenAI client")
             else:
-                st.sidebar.error("Invalid API key format. Should start with 'sk-'")
+                st.sidebar.error("❌ Invalid API key format. Should start with 'sk-'")
     
     return None
 
@@ -311,8 +373,11 @@ def display_analysis_dashboard():
     
     with col2:
         urgency = "Medium"
-        if any("urgent" in str(result).lower() for result in st.session_state.analysis_results.values()):
+        results_text = " ".join([str(result) for result in st.session_state.analysis_results.values()]).lower()
+        if "urgent" in results_text or "critical" in results_text or "emergency" in results_text:
             urgency = "High"
+        elif "normal" in results_text and "abnormal" not in results_text:
+            urgency = "Low"
         st.metric("Overall Urgency", urgency)
     
     with col3:
@@ -363,7 +428,8 @@ def create_medical_visualizations():
         fig.update_layout(
             title='Laboratory Values Comparison',
             barmode='group',
-            showlegend=True
+            showlegend=True,
+            height=400
         )
         st.plotly_chart(fig, use_container_width=True)
     
@@ -383,9 +449,38 @@ def create_medical_visualizations():
         fig.update_layout(
             title='24-Hour Vital Signs Monitoring',
             xaxis_title='Time',
-            yaxis_title='Value'
+            yaxis_title='Value',
+            height=400
         )
         st.plotly_chart(fig, use_container_width=True)
+
+def perform_comprehensive_analysis(chatbot, patient_info, medical_history, lab_data, image_description, report_data):
+    """Perform comprehensive medical analysis"""
+    analysis_results = {}
+    
+    # Analyze lab data
+    if lab_data and lab_data.strip():
+        with st.spinner("🔬 Analyzing laboratory results..."):
+            analysis_results['lab_analysis'] = chatbot.analyze_lab_results(lab_data)
+    
+    # Analyze medical images
+    if image_description and image_description.strip():
+        with st.spinner("🖼️ Analyzing medical images..."):
+            analysis_results['image_analysis'] = chatbot.analyze_medical_image(image_description)
+    
+    # Analyze medical reports
+    if report_data and report_data.strip():
+        with st.spinner("📄 Analyzing medical reports..."):
+            analysis_results['report_analysis'] = chatbot.analyze_medical_report(report_data, "Clinical")
+    
+    # Generate comprehensive patient summary
+    current_findings = f"Lab: {lab_data[:500]}, Imaging: {image_description[:500]}, Reports: {report_data[:500]}"
+    with st.spinner("👨‍⚕️ Generating patient summary..."):
+        analysis_results['patient_summary'] = chatbot.generate_patient_summary(
+            patient_info, medical_history, current_findings
+        )
+    
+    return analysis_results
 
 def main():
     try:
@@ -395,22 +490,22 @@ def main():
         # API Configuration
         api_key = setup_api_configuration()
         
-        if not api_key:
+        if not api_key or st.session_state.chatbot is None or not st.session_state.chatbot.client_configured:
             st.warning("""
             🔑 **API Configuration Required**
             
-            To use MediAI, you need to configure your OpenAI API key in Streamlit secrets.
+            To use MediAI, you need to configure your OpenAI API key.
             
             Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+            
+            Add it to Streamlit secrets or enter it manually in the sidebar.
             """)
+            
+            # Show demo mode or limited functionality
+            st.info("🚀 **Demo Mode**: Some features will be available once API key is configured")
             return
         
-        # Initialize chatbot with API key
-        chatbot = MedicalChatbot(api_key)
-        
-        if not chatbot.client_configured:
-            st.error("Failed to initialize OpenAI client. Please check your API key.")
-            return
+        chatbot = st.session_state.chatbot
         
         # Sidebar for patient information and file uploads
         with st.sidebar:
@@ -418,17 +513,18 @@ def main():
             
             col1, col2 = st.columns(2)
             with col1:
-                patient_id = st.text_input("Patient ID", value="PT-001")
-                patient_age = st.number_input("Age", min_value=0, max_value=120, value=45)
+                patient_id = st.text_input("Patient ID", value="PT-001", key="patient_id")
+                patient_age = st.number_input("Age", min_value=0, max_value=120, value=45, key="patient_age")
             with col2:
-                patient_name = st.text_input("Patient Name", value="John Doe")
-                patient_gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+                patient_name = st.text_input("Patient Name", value="John Doe", key="patient_name")
+                patient_gender = st.selectbox("Gender", ["Male", "Female", "Other"], key="patient_gender")
             
             st.header("📋 Medical History")
             medical_history = st.text_area(
                 "Enter medical history, medications, allergies, and family history", 
                 height=120,
-                value="Hypertension (10 years), Type 2 Diabetes (5 years), Hyperlipidemia. Medications: Lisinopril 10mg, Metformin 500mg. Allergies: Penicillin. Family History: Father - CAD, Mother - Diabetes"
+                value="Hypertension (10 years), Type 2 Diabetes (5 years), Hyperlipidemia. Medications: Lisinopril 10mg, Metformin 500mg. Allergies: Penicillin. Family History: Father - CAD, Mother - Diabetes",
+                key="medical_history"
             )
             
             st.header("📁 Upload Medical Files")
@@ -445,7 +541,8 @@ def main():
                 lab_text_input = st.text_area("Or paste lab results directly:", height=100,
                                             value="""CBC: WBC 8.2 (4.0-11.0), RBC 4.5 (4.2-5.8), Hgb 14.2 (12.0-16.0), Hct 42% (36-48), Platelets 250 (150-450)
 Chemistry: Glucose 110 (70-100), Creatinine 1.1 (0.6-1.3), BUN 18 (7-20), ALT 25 (7-55), AST 22 (8-48)
-Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglycerides 150 (<150)""")
+Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglycerides 150 (<150)""",
+                                            key="lab_text")
             
             with tab_image:
                 st.subheader("Upload Medical Images")
@@ -454,7 +551,8 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
                                              key="image_uploader",
                                              accept_multiple_files=True)
                 image_description = st.text_area("Describe image findings or upload details:", height=100,
-                                               value="Chest X-ray PA view: Mild cardiomegaly noted. Clear lung fields, no focal consolidation. No pleural effusion. Mediastinal contours are normal.")
+                                               value="Chest X-ray PA view: Mild cardiomegaly noted. Clear lung fields, no focal consolidation. No pleural effusion. Mediastinal contours are normal.",
+                                               key="image_desc")
             
             with tab_report:
                 st.subheader("Upload Medical Reports")
@@ -463,7 +561,8 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
                                               key="report_uploader",
                                               accept_multiple_files=True)
                 report_text_input = st.text_area("Or paste report content directly:", height=100,
-                                               value="ECG Report: Normal sinus rhythm, rate 72 bpm. Normal axis. No ST-T wave changes. Echocardiogram: Normal LV function, EF 55%. Mild LVH.")
+                                               value="ECG Report: Normal sinus rhythm, rate 72 bpm. Normal axis. No ST-T wave changes. Echocardiogram: Normal LV function, EF 55%. Mild LVH.",
+                                               key="report_text")
             
             # Analysis Controls
             st.header("🔍 Analysis Controls")
@@ -471,63 +570,39 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
             analyze_col1, analyze_col2 = st.columns(2)
             
             with analyze_col1:
-                if st.button("🚀 Analyze All Data", type="primary", use_container_width=True):
+                if st.button("🚀 Analyze All Data", type="primary", use_container_width=True, key="analyze_all"):
                     with st.spinner("🔄 Comprehensive analysis in progress..."):
-                        analysis_results = {}
-                        
-                        # Analyze lab data
+                        # Collect all lab data
                         lab_data = lab_text_input
                         if lab_files:
                             for file in lab_files:
-                                if file.type == "application/pdf":
-                                    lab_data += "\n" + chatbot.extract_text_from_pdf(file)
-                                elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                                    lab_data += "\n" + chatbot.extract_text_from_docx(file)
-                                else:
-                                    lab_data += "\n" + str(file.read(), 'utf-8')
+                                extracted_text = chatbot.extract_text_from_file(file)
+                                lab_data += f"\n\n--- From {file.name} ---\n{extracted_text}"
                         
-                        if lab_data:
-                            analysis_results['lab_analysis'] = chatbot.analyze_lab_results(lab_data)
-                        
-                        # Analyze medical images
-                        if image_files or image_description:
-                            analysis_results['image_analysis'] = chatbot.analyze_medical_image(
-                                image_files[0] if image_files else None, 
-                                image_description
-                            )
-                        
-                        # Analyze medical reports
+                        # Collect all report data
                         report_data = report_text_input
                         if report_files:
                             for file in report_files:
-                                if file.type == "application/pdf":
-                                    report_data += "\n" + chatbot.extract_text_from_pdf(file)
-                                elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                                    report_data += "\n" + chatbot.extract_text_from_docx(file)
-                                else:
-                                    report_data += "\n" + str(file.read(), 'utf-8')
+                                extracted_text = chatbot.extract_text_from_file(file)
+                                report_data += f"\n\n--- From {file.name} ---\n{extracted_text}"
                         
-                        if report_data:
-                            analysis_results['report_analysis'] = chatbot.analyze_medical_report(report_data, "Clinical")
-                        
-                        # Generate comprehensive patient summary
                         patient_info = f"ID: {patient_id}, Name: {patient_name}, Age: {patient_age}, Gender: {patient_gender}"
-                        current_findings = f"Lab: {lab_data}, Imaging: {image_description}, Reports: {report_data}"
-                        analysis_results['patient_summary'] = chatbot.generate_patient_summary(
-                            patient_info, medical_history, current_findings
+                        
+                        analysis_results = perform_comprehensive_analysis(
+                            chatbot, patient_info, medical_history, lab_data, image_description, report_data
                         )
                         
                         st.session_state.analysis_results = analysis_results
                         st.success("✅ Analysis complete! Check the dashboard and report tabs.")
             
             with analyze_col2:
-                if st.button("🔄 Clear All Results", use_container_width=True):
+                if st.button("🔄 Clear All Results", use_container_width=True, key="clear_results"):
                     st.session_state.analysis_results = {}
                     st.session_state.messages = []
                     st.session_state.uploaded_files = []
                     st.rerun()
 
-        # MAIN CONTENT AREA - CHAT MUST BE AT ROOT LEVEL
+        # MAIN CONTENT AREA
         st.header("💬 Dr. MedAI - Medical Chat Assistant")
         st.markdown("Chat with your AI medical assistant for clinical decision support")
         
@@ -536,7 +611,7 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
         
-        # Chat input - AT ROOT LEVEL (not inside any container)
+        # Chat input
         if prompt := st.chat_input("Ask about patient analysis, differential diagnosis, or medical queries..."):
             # Add user message to chat history
             st.session_state.messages.append({"role": "user", "content": prompt})
@@ -554,7 +629,7 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
                     # Add AI response to chat history
                     st.session_state.messages.append({"role": "assistant", "content": ai_response})
 
-        # Tabs for other features (without chat input inside)
+        # Tabs for other features
         tab1, tab2, tab3 = st.tabs(["📊 Analysis Dashboard", "📈 Visual Analytics", "📋 Medical Report"])
         
         with tab1:
@@ -639,6 +714,7 @@ Based on the comprehensive analysis, the following actions are recommended:
                 """)
     
     except Exception as e:
+        logger.error(f"Application error: {str(e)}")
         st.error(f"Application error: {str(e)}")
         st.info("Please check the logs for more details. If this persists, try refreshing the page.")
 
