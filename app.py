@@ -15,7 +15,7 @@ import tempfile
 from datetime import datetime
 import logging
 import re
-from groq import qroq
+from groq import groq
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -897,4 +897,5 @@ def create_advanced_visualizations():
 
 if __name__ == "__main__":
     main()
+
 
