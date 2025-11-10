@@ -6,3 +6,6 @@ numpy==1.24.0
 plotly==5.15.0
 Pillow==10.0.0
 python-multipart==0.0.6
+pdfplumber==0.10.3
+python-docx==1.1.0
+streamlit-image-select==1.1.5
