@@ -15,7 +15,7 @@ import tempfile
 from datetime import datetime
 import logging
 import re
-from groq import groq
+from groq import Groq  # Corrected import
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -139,6 +139,8 @@ if 'groq_client' not in st.session_state:
     st.session_state.groq_client = None
 if 'api_configured' not in st.session_state:
     st.session_state.api_configured = False
+if 'analyze_clicked' not in st.session_state:
+    st.session_state.analyze_clicked = False
 
 class MedicalAIAnalyzer:
     def __init__(self, groq_client=None):
@@ -592,6 +594,7 @@ Lipid Panel: Total Cholesterol 185, LDL 110, HDL 45, Triglycerides 150""",
             if st.button("🔄 **Clear All**", use_container_width=True):
                 st.session_state.analysis_results = {}
                 st.session_state.messages = []
+                st.session_state.analyze_clicked = False
                 st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
         
@@ -729,6 +732,52 @@ def display_analysis_dashboard(analyzer):
         with st.expander("👨‍⚕️ **AI Patient Assessment**", expanded=True):
             st.markdown(st.session_state.analysis_results['patient_summary'])
 
+def create_advanced_visualizations():
+    """Create professional medical visualizations"""
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("🩸 Laboratory Trends")
+        lab_data = {
+            'Parameter': ['WBC', 'Hgb', 'Glucose', 'Creatinine', 'ALT', 'LDL'],
+            'Current': [8.2, 14.2, 110, 1.1, 25, 110],
+            'Previous': [7.8, 13.8, 98, 0.9, 22, 125],
+            'Normal Low': [4.0, 12.0, 70, 0.6, 7, 0],
+            'Normal High': [11.0, 16.0, 100, 1.3, 55, 100]
+        }
+        
+        df = pd.DataFrame(lab_data)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df['Parameter'], y=df['Normal High'], 
+                               mode='lines', name='Upper Limit', line=dict(dash='dash', color='red')))
+        fig.add_trace(go.Scatter(x=df['Parameter'], y=df['Normal Low'], 
+                               mode='lines', name='Lower Limit', line=dict(dash='dash', color='red')))
+        fig.add_trace(go.Bar(name='Current', x=df['Parameter'], y=df['Current'], marker_color='blue'))
+        fig.add_trace(go.Bar(name='Previous', x=df['Parameter'], y=df['Previous'], marker_color='lightblue'))
+        
+        fig.update_layout(
+            title='Laboratory Parameters Trend',
+            barmode='group',
+            showlegend=True,
+            height=400
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("📊 Health Risk Assessment")
+        categories = ['Cardiovascular', 'Metabolic', 'Hepatic', 'Renal', 'Hematological']
+        risk_scores = [65, 45, 20, 30, 15]
+        
+        fig = go.Figure(data=[go.Bar(x=categories, y=risk_scores, 
+                                   marker_color=['red', 'orange', 'yellow', 'lightgreen', 'green'])])
+        fig.update_layout(
+            title='System-based Risk Assessment',
+            yaxis_title='Risk Score (%)',
+            height=400
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
 def main():
     # Professional Header
     st.markdown("<h1 class='main-header'>🏥 MediAI Pro</h1>", unsafe_allow_html=True)
@@ -744,7 +793,7 @@ def main():
     patient_data = setup_sidebar()
     
     # Perform analysis if requested
-    if hasattr(st.session_state, 'analyze_clicked') and st.session_state.analyze_clicked:
+    if st.session_state.analyze_clicked:
         with st.spinner("🔄 Performing AI-powered medical analysis..."):
             analysis_results = {}
             
@@ -849,53 +898,5 @@ Comprehensive medical analysis performed using advanced AI (Groq Llama 3 70B) wi
         else:
             st.info("Generate AI analysis first to view the comprehensive medical report.")
 
-def create_advanced_visualizations():
-    """Create professional medical visualizations"""
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🩸 Laboratory Trends")
-        lab_data = {
-            'Parameter': ['WBC', 'Hgb', 'Glucose', 'Creatinine', 'ALT', 'LDL'],
-            'Current': [8.2, 14.2, 110, 1.1, 25, 110],
-            'Previous': [7.8, 13.8, 98, 0.9, 22, 125],
-            'Normal Low': [4.0, 12.0, 70, 0.6, 7, 0],
-            'Normal High': [11.0, 16.0, 100, 1.3, 55, 100]
-        }
-        
-        df = pd.DataFrame(lab_data)
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['Parameter'], y=df['Normal High'], 
-                               mode='lines', name='Upper Limit', line=dict(dash='dash', color='red')))
-        fig.add_trace(go.Scatter(x=df['Parameter'], y=df['Normal Low'], 
-                               mode='lines', name='Lower Limit', line=dict(dash='dash', color='red')))
-        fig.add_trace(go.Bar(name='Current', x=df['Parameter'], y=df['Current'], marker_color='blue'))
-        fig.add_trace(go.Bar(name='Previous', x=df['Parameter'], y=df['Previous'], marker_color='lightblue'))
-        
-        fig.update_layout(
-            title='Laboratory Parameters Trend',
-            barmode='group',
-            showlegend=True,
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.subheader("📊 Health Risk Assessment")
-        categories = ['Cardiovascular', 'Metabolic', 'Hepatic', 'Renal', 'Hematological']
-        risk_scores = [65, 45, 20, 30, 15]
-        
-        fig = go.Figure(data=[go.Bar(x=categories, y=risk_scores, 
-                                   marker_color=['red', 'orange', 'yellow', 'lightgreen', 'green'])])
-        fig.update_layout(
-            title='System-based Risk Assessment',
-            yaxis_title='Risk Score (%)',
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
 if __name__ == "__main__":
     main()
-
-
