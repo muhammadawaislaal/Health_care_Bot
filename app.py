@@ -15,6 +15,7 @@ import tempfile
 from datetime import datetime
 import logging
 import re
+from groq import Groq
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,15 +77,18 @@ st.markdown("""
         margin: 0.5rem 0;
         max-width: 80%;
         margin-left: auto;
+        word-wrap: break-word;
     }
     .assistant-message {
-        background-color: #e9ecef;
+        background-color: #ffffff;
         color: #333;
         padding: 1rem;
         border-radius: 15px;
         margin: 0.5rem 0;
         max-width: 80%;
         margin-right: auto;
+        border: 1px solid #e0e0e0;
+        word-wrap: break-word;
     }
     .stButton button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -105,8 +109,19 @@ st.markdown("""
         text-align: center;
         cursor: pointer;
     }
-    .quick-action-btn:hover {
-        background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+    .api-status-connected {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 0.5rem;
+        border-radius: 5px;
+        border: 1px solid #c3e6cb;
+    }
+    .api-status-disconnected {
+        background-color: #f8d7da;
+        color: #721c24;
+        padding: 0.5rem;
+        border-radius: 5px;
+        border: 1px solid #f5c6cb;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -120,11 +135,14 @@ if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = {}
 if 'uploaded_files' not in st.session_state:
     st.session_state.uploaded_files = []
+if 'groq_client' not in st.session_state:
+    st.session_state.groq_client = None
 if 'api_configured' not in st.session_state:
     st.session_state.api_configured = False
 
 class MedicalAIAnalyzer:
-    def __init__(self):
+    def __init__(self, groq_client=None):
+        self.groq_client = groq_client
         self.medical_knowledge_base = self._initialize_medical_knowledge()
     
     def _initialize_medical_knowledge(self):
@@ -145,352 +163,277 @@ class MedicalAIAnalyzer:
                 'LDL': {'low': 0, 'high': 100, 'unit': 'mg/dL', 'critical_low': 0, 'critical_high': 190},
                 'HDL': {'low': 40, 'high': 100, 'unit': 'mg/dL', 'critical_low': 20, 'critical_high': 150},
                 'Triglycerides': {'low': 0, 'high': 150, 'unit': 'mg/dL', 'critical_low': 0, 'critical_high': 500}
-            },
-            'symptoms_database': {
-                'fever': {
-                    'causes': ['Infection', 'Inflammation', 'Autoimmune disorders', 'Medication reaction'],
-                    'red_flags': ['Fever > 104°F', 'Fever lasting > 3 days', 'Rash', 'Stiff neck', 'Confusion'],
-                    'advice': 'Rest, hydrate, monitor temperature. Seek care for high fever or concerning symptoms.'
-                },
-                'chest_pain': {
-                    'causes': ['Cardiac issues', 'Pulmonary problems', 'GERD', 'Musculoskeletal pain', 'Anxiety'],
-                    'red_flags': ['Radiating pain', 'Shortness of breath', 'Sweating', 'Nausea'],
-                    'advice': 'Seek emergency care for chest pain with concerning features.'
-                },
-                'headache': {
-                    'causes': ['Tension', 'Migraine', 'Sinusitis', 'Dehydration', 'Hypertension'],
-                    'red_flags': ['Sudden severe headache', 'Vision changes', 'Weakness', 'Fever with headache'],
-                    'advice': 'Rest in quiet room, hydrate. Seek care for severe or unusual headaches.'
-                }
             }
         }
-    
+
     def chat_with_medical_ai(self, message, conversation_history=None, patient_context=None):
-        """Advanced medical chat using rule-based AI with comprehensive responses"""
+        """Advanced medical chat using Groq API"""
+        if not self.groq_client:
+            return "🚫 **Medical AI Service Unavailable**\n\nPlease configure Groq API key in the sidebar to enable AI-powered medical conversations."
+        
         try:
-            # Analyze message for medical content
-            message_lower = message.lower()
-            
-            # Build context from conversation history
-            context = self._build_conversation_context(conversation_history)
-            
-            # Generate comprehensive medical response
-            response = self._generate_medical_response(message_lower, context, patient_context)
-            
-            return response
-            
+            # Build system prompt with medical context
+            system_prompt = f"""
+            You are Dr. MedAI, an advanced AI medical assistant with the following characteristics:
+
+            **ROLE**: Senior Medical Consultant with 20+ years of clinical experience
+            **SPECIALTIES**: Internal Medicine, Family Practice, Emergency Medicine, Patient Education
+
+            **PATIENT CONTEXT**:
+            {patient_context if patient_context else 'No specific patient context provided'}
+
+            **COMMUNICATION GUIDELINES**:
+            - Be empathetic, professional, and clear in all responses
+            - Explain medical concepts in simple, understandable language
+            - Provide evidence-based medical information
+            - Always maintain patient confidentiality and privacy
+            - Show genuine concern for patient wellbeing
+
+            **MEDICAL EXPERTISE**:
+            - Symptom analysis and triage guidance
+            - Medication information and safety
+            - Test result interpretation
+            - Chronic disease management
+            - Preventive health and wellness
+            - Emergency recognition
+
+            **SAFETY PROTOCOLS**:
+            - NEVER provide definitive diagnoses
+            - ALWAYS recommend consulting healthcare providers for personal medical advice
+            - Identify red flag symptoms that require immediate medical attention
+            - Suggest appropriate specialist referrals when needed
+            - Emphasize when symptoms require emergency care
+
+            **RESPONSE STRUCTURE**:
+            1. Acknowledge and understand the patient's concern
+            2. Provide educational medical information
+            3. Suggest appropriate next steps
+            4. Highlight when to seek immediate care
+            5. Offer supportive guidance and reassurance
+
+            **REMEMBER**: You are an AI assistant supporting healthcare, not replacing professional medical care.
+            """
+
+            # Build messages array
+            messages = [
+                {"role": "system", "content": system_prompt}
+            ]
+
+            # Add conversation history (last 10 messages for context)
+            if conversation_history:
+                for msg in conversation_history[-10:]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+
+            # Add current user message
+            messages.append({"role": "user", "content": message})
+
+            # Get response from Groq
+            response = self.groq_client.chat.completions.create(
+                model="llama3-70b-8192",  # Using powerful 70B model for medical reasoning
+                messages=messages,
+                temperature=0.3,  # Lower temperature for more consistent medical responses
+                max_tokens=1500,
+                top_p=0.9,
+                stream=False
+            )
+
+            return response.choices[0].message.content
+
         except Exception as e:
-            logger.error(f"Medical AI error: {str(e)}")
-            return "I apologize, but I'm having difficulty processing your request. Please try rephrasing your question or consult a healthcare provider for immediate medical concerns."
-    
-    def _build_conversation_context(self, conversation_history):
-        """Build context from conversation history"""
-        context = {
-            'symptoms_mentioned': [],
-            'medications_mentioned': [],
-            'conditions_mentioned': [],
-            'tests_mentioned': []
-        }
-        
-        if conversation_history:
-            for msg in conversation_history[-10:]:  # Last 10 messages
-                content = msg['content'].lower()
-                
-                # Extract symptoms
-                for symptom in ['fever', 'pain', 'headache', 'cough', 'nausea', 'fatigue', 'dizziness']:
-                    if symptom in content and symptom not in context['symptoms_mentioned']:
-                        context['symptoms_mentioned'].append(symptom)
-                
-                # Extract medications
-                med_keywords = ['medication', 'pill', 'tablet', 'prescription', 'taking', 'drug']
-                if any(keyword in content for keyword in med_keywords):
-                    context['medications_mentioned'].append('medications discussed')
-                
-                # Extract conditions
-                for condition in ['diabetes', 'hypertension', 'heart', 'lung', 'kidney', 'liver']:
-                    if condition in content and condition not in context['conditions_mentioned']:
-                        context['conditions_mentioned'].append(condition)
-        
-        return context
-    
-    def _generate_medical_response(self, message, context, patient_context):
-        """Generate comprehensive medical response"""
-        response_parts = []
-        
-        # Greeting response
-        if any(word in message for word in ['hello', 'hi', 'hey', 'greetings']):
-            response_parts.append("Hello! I'm Dr. MedAI, your medical assistant. I'm here to help with health-related questions, symptom discussions, and general medical information. How can I assist you today?")
-        
-        # Symptom analysis
-        elif any(word in message for word in ['symptom', 'pain', 'hurt', 'feel', 'experience']):
-            response_parts.append(self._analyze_symptoms(message, context))
-        
-        # Medication questions
-        elif any(word in message for word in ['medication', 'pill', 'drug', 'prescription', 'taking']):
-            response_parts.append(self._discuss_medications(message))
-        
-        # Test results
-        elif any(word in message for word in ['test', 'result', 'lab', 'blood', 'report']):
-            response_parts.append(self._discuss_test_results(message))
-        
-        # General health advice
-        elif any(word in message for word in ['healthy', 'diet', 'exercise', 'lifestyle', 'prevent']):
-            response_parts.append(self._provide_health_advice(message))
-        
-        # Emergency recognition
-        elif any(word in message for word in ['emergency', 'urgent', '911', 'hospital', 'severe']):
-            response_parts.append(self._emergency_guidance())
-        
-        # Default medical response
-        else:
-            response_parts.append(self._general_medical_response(message))
-        
-        # Add patient context if available
-        if patient_context:
-            response_parts.append(f"\n\n*Considering your profile: {patient_context}*")
-        
-        # Add safety disclaimer
-        response_parts.append("\n\n---\n**Important**: This is general medical information. Always consult healthcare providers for personal medical advice. Seek emergency care for serious symptoms.")
-        
-        return "".join(response_parts)
-    
-    def _analyze_symptoms(self, message, context):
-        """Analyze symptoms and provide guidance"""
-        symptoms_found = []
-        
-        for symptom, info in self.medical_knowledge_base['symptoms_database'].items():
-            if symptom in message:
-                symptoms_found.append(symptom)
-        
-        if symptoms_found:
-            response = "## Symptom Analysis\n\n"
-            for symptom in symptoms_found:
-                info = self.medical_knowledge_base['symptoms_database'][symptom]
-                response += f"**{symptom.title()}**:\n"
-                response += f"- Possible causes: {', '.join(info['causes'])}\n"
-                response += f"- Watch for: {', '.join(info['red_flags'])}\n"
-                response += f"- General advice: {info['advice']}\n\n"
-            
-            response += "**Next Steps**:\n"
-            response += "1. Monitor symptoms and severity\n"
-            response += "2. Keep a symptom diary if ongoing\n"
-            response += "3. Contact healthcare provider if symptoms persist or worsen\n"
-            response += "4. Seek emergency care for red flag symptoms\n"
-            
-            return response
-        else:
-            return "I understand you're discussing symptoms. Could you provide more details about what you're experiencing, such as location, severity, duration, and any associated symptoms? This will help me provide more specific guidance."
-    
-    def _discuss_medications(self, message):
-        """Provide medication information"""
-        return """
-## Medication Information
+            logger.error(f"Groq API error: {str(e)}")
+            return f"⚠️ **I'm experiencing technical difficulties**\n\nError: {str(e)}\n\nPlease try again in a moment or check your API configuration."
 
-**General Medication Safety**:
-- Always take medications as prescribed
-- Never stop medications without consulting your doctor
-- Be aware of potential side effects
-- Keep an updated medication list
-- Inform all providers about all medications you take
-
-**Common Considerations**:
-- Report any new symptoms after starting medications
-- Understand medication purpose and expected effects
-- Ask about potential interactions with other drugs
-- Follow storage instructions carefully
-
-**When to Contact Your Doctor**:
-- Severe side effects or allergic reactions
-- Questions about dosage or timing
-- Concerns about effectiveness
-- Considering stopping or changing medications
-
-Please consult your healthcare provider or pharmacist for medication-specific advice.
-"""
-    
-    def _discuss_test_results(self, message):
-        """Discuss test results and their meaning"""
-        return """
-## Understanding Test Results
-
-**Laboratory Tests**:
-- Results should always be interpreted by healthcare providers
-- "Normal ranges" can vary between laboratories
-- Single abnormal values may not be significant
-- Trends over time are often more important than single results
-
-**Common Test Categories**:
-- **Blood tests**: CBC, chemistry panels, lipid profiles
-- **Imaging**: X-rays, CT scans, MRI, ultrasound
-- **Cardiac**: ECG, echocardiogram, stress tests
-- **Screening**: Cancer screening, preventive tests
-
-**Next Steps for Test Results**:
-1. Discuss results with your ordering provider
-2. Understand what abnormal results mean for your health
-3. Ask about necessary follow-up testing
-4. Inquire about treatment options if needed
-5. Request copies of your results for your records
-
-Your healthcare provider can explain what your specific results mean in the context of your overall health.
-"""
-    
-    def _provide_health_advice(self, message):
-        """Provide general health advice"""
-        return """
-## General Health & Wellness
-
-**Healthy Lifestyle Foundations**:
-
-🍎 **Nutrition**:
-- Balanced diet with fruits, vegetables, whole grains
-- Adequate protein and healthy fats
-- Limit processed foods, sugar, and excess salt
-- Stay hydrated with water
-
-💪 **Physical Activity**:
-- 150 minutes moderate exercise weekly
-- Strength training 2x weekly
-- Include flexibility and balance exercises
-- Find activities you enjoy
-
-😴 **Sleep & Rest**:
-- 7-9 hours quality sleep nightly
-- Consistent sleep schedule
-- Create restful sleep environment
-- Manage stress through relaxation
-
-🩺 **Preventive Care**:
-- Regular health check-ups
-- Age-appropriate screenings
-- Vaccinations up to date
-- Dental and vision care
-
-**Remember**: Small, consistent changes lead to lasting health benefits.
-"""
-    
-    def _emergency_guidance(self):
-        """Provide emergency guidance"""
-        return """
-## 🚨 Emergency Medical Situations
-
-**Seek IMMEDIATE Medical Attention for**:
-
-🔴 **Life-Threatening Symptoms**:
-- Chest pain or pressure
-- Difficulty breathing
-- Severe bleeding
-- Sudden weakness or numbness
-- Severe burns
-- Poisoning or overdose
-- Suicidal or homicidal thoughts
-
-🔴 **Other Emergency Signs**:
-- High fever with stiff neck or confusion
-- Severe allergic reaction
-- Head injury with loss of consciousness
-- Broken bones with deformity
-- Severe abdominal pain
-- Seizures for the first time
-
-**In Emergency Situations**:
-- Call emergency services (911) immediately
-- Do not drive yourself to the hospital
-- Have someone stay with you
-- Bring medications and medical information
-- Don't delay seeking care for concerning symptoms
-
-Your safety is the top priority. When in doubt, seek medical evaluation.
-"""
-    
-    def _general_medical_response(self, message):
-        """General medical response for other queries"""
-        return """
-## Medical Information & Support
-
-I'm here to provide general medical information and support. I can help with:
-
-🤒 **Symptom Discussion**: Understanding common symptoms and when to seek care
-💊 **Medication Questions**: General information about medication safety and usage
-🩺 **Test Results**: Guidance on understanding common medical tests
-🍎 **Health & Wellness**: Lifestyle advice for maintaining good health
-📋 **Healthcare Navigation**: Tips for working with healthcare providers
-
-**How to Get the Most Help**:
-- Be specific about your questions or concerns
-- Provide relevant context about your situation
-- Let me know if you have particular health conditions
-- Share what you're hoping to learn or accomplish
-
-Remember, I provide general medical information. For personal medical advice, always consult qualified healthcare professionals.
-"""
-    
     def analyze_lab_results(self, lab_data):
-        """Advanced laboratory results analysis"""
+        """AI-powered laboratory results analysis using Groq"""
+        if not self.groq_client:
+            return self._basic_lab_analysis(lab_data)
+        
+        try:
+            prompt = f"""
+            Analyze these laboratory results as a senior medical consultant:
+
+            LABORATORY DATA:
+            {lab_data}
+
+            Please provide a comprehensive medical analysis with:
+
+            **CRITICAL FINDINGS**: Identify any values that require immediate medical attention
+            **ABNORMALITIES**: Note all values outside normal ranges
+            **CLINICAL INTERPRETATION**: Explain what these results mean medically
+            **DIFFERENTIAL DIAGNOSIS**: Suggest possible conditions to consider
+            **RECOMMENDED ACTIONS**: Provide clear next steps for follow-up
+            **URGENCY LEVEL**: Assess overall urgency (Low/Medium/High)
+
+            Format this as a professional medical consultation note.
+            """
+
+            response = self.groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a senior pathologist and medical consultant. Provide accurate, professional laboratory analysis with clear clinical correlations and actionable recommendations. Always emphasize patient safety."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=2000
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"AI lab analysis failed: {str(e)}")
+            return self._basic_lab_analysis(lab_data)
+    
+    def _basic_lab_analysis(self, lab_data):
+        """Basic laboratory analysis fallback"""
         extracted_values = self.extract_lab_values(lab_data)
         
-        analysis = "## 🔬 Comprehensive Laboratory Analysis\n\n"
+        analysis = "## 🔬 Laboratory Analysis\n\n"
         
-        critical_findings = []
-        abnormal_findings = []
-        normal_findings = []
-        
-        for test, value in extracted_values.items():
-            if test in self.medical_knowledge_base['lab_ranges']:
-                ranges = self.medical_knowledge_base['lab_ranges'][test]
-                
-                if value < ranges['critical_low'] or value > ranges['critical_high']:
-                    critical_findings.append((test, value, ranges))
-                elif value < ranges['low'] or value > ranges['high']:
-                    abnormal_findings.append((test, value, ranges))
-                else:
-                    normal_findings.append((test, value, ranges))
-        
-        # Critical findings
-        if critical_findings:
-            analysis += "### 🚨 Critical Findings Requiring Immediate Attention\n"
-            for test, value, ranges in critical_findings:
-                analysis += f"- **{test}**: {value} {ranges['unit']} (Critical range: {ranges['critical_low']}-{ranges['critical_high']})\n"
-            analysis += "\n"
-        
-        # Abnormal findings
-        if abnormal_findings:
-            analysis += "### ⚠️ Abnormal Findings\n"
-            for test, value, ranges in abnormal_findings:
-                analysis += f"- **{test}**: {value} {ranges['unit']} (Normal: {ranges['low']}-{ranges['high']})\n"
-            analysis += "\n"
-        
-        # Normal findings
-        if normal_findings:
-            analysis += "### ✅ Within Normal Range\n"
-            for test, value, ranges in normal_findings:
-                analysis += f"- **{test}**: {value} {ranges['unit']}\n"
-            analysis += "\n"
-        
-        # Clinical interpretation
-        analysis += "### 🩺 Clinical Interpretation\n"
-        if critical_findings:
-            analysis += "**URGENT MEDICAL ATTENTION REQUIRED**\n\n"
-            analysis += "Critical laboratory values detected that require immediate medical evaluation.\n\n"
-        elif abnormal_findings:
-            analysis += "Abnormal laboratory values noted that warrant clinical correlation and follow-up.\n\n"
+        if extracted_values:
+            analysis += "### 📊 Laboratory Values\n"
+            for test, value in extracted_values.items():
+                if test in self.medical_knowledge_base['lab_ranges']:
+                    ranges = self.medical_knowledge_base['lab_ranges'][test]
+                    if value < ranges['low']:
+                        analysis += f"⚠️ **{test}**: {value} {ranges['unit']} (Low - Normal: {ranges['low']}-{ranges['high']})\n"
+                    elif value > ranges['high']:
+                        analysis += f"⚠️ **{test}**: {value} {ranges['unit']} (High - Normal: {ranges['low']}-{ranges['high']})\n"
+                    else:
+                        analysis += f"✅ **{test}**: {value} {ranges['unit']} (Normal)\n"
         else:
-            analysis += "All analyzed laboratory parameters are within normal reference ranges.\n\n"
+            analysis += "No specific laboratory values detected in the provided data.\n"
         
-        # Recommendations
-        analysis += "### 📋 Recommended Actions\n"
-        if critical_findings:
-            analysis += "1. **IMMEDIATE**: Contact healthcare provider or seek emergency care\n"
-            analysis += "2. **URGENT**: Repeat critical tests for confirmation\n"
-            analysis += "3. **SPECIALIST**: Consult relevant medical specialist\n"
-        elif abnormal_findings:
-            analysis += "1. **Follow-up**: Repeat abnormal tests as recommended\n"
-            analysis += "2. **Correlation**: Evaluate with clinical symptoms\n"
-            analysis += "3. **Monitoring**: Establish parameter monitoring plan\n"
-        else:
-            analysis += "1. **Continue** routine health monitoring\n"
-            analysis += "2. **Maintain** current health practices\n"
-            analysis += "3. **Schedule** next routine evaluation\n"
+        analysis += "\n### 🩺 Recommendations\n"
+        analysis += "1. Discuss all findings with your healthcare provider\n"
+        analysis += "2. Correlate results with clinical symptoms\n"
+        analysis += "3. Follow up on any abnormal findings\n"
+        
+        return analysis
+    
+    def analyze_medical_image(self, image_description):
+        """AI-powered medical image analysis using Groq"""
+        if not self.groq_client:
+            return self._basic_image_analysis(image_description)
+        
+        try:
+            prompt = f"""
+            Analyze this medical image description as a board-certified radiologist:
+
+            IMAGE FINDINGS DESCRIPTION:
+            {image_description}
+
+            Please provide a comprehensive radiology assessment including:
+
+            **TECHNICAL ASSESSMENT**: Image quality and limitations
+            **KEY FINDINGS**: Detailed observations and abnormalities
+            **DIFFERENTIAL DIAGNOSIS**: Possible conditions to consider
+            **CLINICAL CORRELATION**: How findings relate to patient care
+            **RECOMMENDATIONS**: Further imaging, follow-up, or specialist consultation
+
+            Format this as a standard radiology report.
+            """
+
+            response = self.groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a board-certified radiologist with extensive experience. Provide detailed, professional image interpretation following standard radiology reporting protocols. Always recommend formal radiology consultation for definitive interpretation."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=1800
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"AI image analysis failed: {str(e)}")
+            return self._basic_image_analysis(image_description)
+    
+    def _basic_image_analysis(self, image_description):
+        """Basic image analysis fallback"""
+        analysis = "## 🖼️ Medical Image Analysis\n\n"
+        analysis += f"**Description**: {image_description}\n\n"
+        analysis += "### 📋 Assessment Framework\n"
+        analysis += "1. Evaluate image quality and technical factors\n"
+        analysis += "2. Systematic review of anatomical structures\n"
+        analysis += "3. Identification of abnormalities\n"
+        analysis += "4. Clinical correlation with patient presentation\n"
+        analysis += "5. Recommendations for further evaluation\n\n"
+        analysis += "### 🎯 Next Steps\n"
+        analysis += "- Formal radiology consultation recommended\n"
+        analysis += "- Compare with previous studies if available\n"
+        analysis += "- Clinical correlation with symptoms\n"
+        
+        return analysis
+    
+    def generate_patient_summary(self, patient_info, medical_history, current_findings):
+        """AI-powered comprehensive patient summary using Groq"""
+        if not self.groq_client:
+            return self._basic_patient_summary(patient_info, medical_history, current_findings)
+        
+        try:
+            prompt = f"""
+            Generate a comprehensive patient summary and care plan:
+
+            PATIENT INFORMATION: {patient_info}
+            MEDICAL HISTORY: {medical_history}
+            CURRENT FINDINGS: {current_findings}
+
+            Please create a structured medical summary including:
+
+            **COMPREHENSIVE ASSESSMENT**:
+            - Current clinical status and problem list
+            - Risk stratification and prioritization
+            - Overall health assessment
+
+            **TREATMENT PLAN**:
+            - Immediate interventions if needed
+            - Medication recommendations
+            - Lifestyle modifications
+
+            **MONITORING & FOLLOW-UP**:
+            - Parameters to track
+            - Laboratory monitoring schedule
+            - Specialist referrals needed
+            - Follow-up timeline
+
+            **PATIENT EDUCATION**:
+            - Key discussion points
+            - Warning signs to watch for
+            - Self-management strategies
+
+            Format as a professional clinical note.
+            """
+
+            response = self.groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are an experienced physician creating comprehensive patient care plans. Focus on evidence-based, practical recommendations with clear follow-up actions. Always emphasize the importance of professional medical follow-up."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=2500
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"AI patient summary failed: {str(e)}")
+            return self._basic_patient_summary(patient_info, medical_history, current_findings)
+    
+    def _basic_patient_summary(self, patient_info, medical_history, current_findings):
+        """Basic patient summary fallback"""
+        analysis = "## 👨‍⚕️ Patient Assessment\n\n"
+        analysis += f"**Patient**: {patient_info}\n\n"
+        analysis += f"**History**: {medical_history}\n\n"
+        analysis += f"**Findings**: {current_findings}\n\n"
+        analysis += "### 💡 Recommendations\n"
+        analysis += "1. Review all findings with healthcare provider\n"
+        analysis += "2. Implement recommended monitoring\n"
+        analysis += "3. Schedule appropriate follow-up\n"
         
         return analysis
     
@@ -520,91 +463,63 @@ Remember, I provide general medical information. For personal medical advice, al
                     except ValueError:
                         continue
         return extracted_values
+
+def setup_groq_api():
+    """Setup Groq API configuration"""
+    st.sidebar.header("🔑 API Configuration")
     
-    def analyze_medical_image(self, image_description):
-        """Medical image analysis"""
-        analysis = "## 🖼️ Medical Image Analysis\n\n"
-        analysis += f"**Image Description**: {image_description}\n\n"
-        
-        analysis += "### 📋 Radiological Assessment Framework\n"
-        analysis += "1. **Technical Quality**: Evaluate image clarity and positioning\n"
-        analysis += "2. **Systematic Review**: Assess all visualized anatomical structures\n"
-        analysis += "3. **Pathological Findings**: Identify any abnormalities or variations\n"
-        analysis += "4. **Clinical Correlation**: Relate findings to patient's condition\n"
-        analysis += "5. **Recommendations**: Suggest further evaluation if needed\n\n"
-        
-        analysis += "### 🎯 Key Considerations\n"
-        
-        # Keyword-based insights
-        if any(word in image_description.lower() for word in ['cardiomegaly', 'enlarged heart']):
-            analysis += "- **Cardiomegaly noted**: Evaluate for heart failure, cardiomyopathy\n"
-        if any(word in image_description.lower() for word in ['consolidation', 'opacity']):
-            analysis += "- **Pulmonary findings**: Consider infection, inflammation, or other pathology\n"
-        if any(word in image_description.lower() for word in ['fracture', 'break']):
-            analysis += "- **Fracture identified**: Assess alignment and potential complications\n"
-        
-        analysis += "\n### 📞 Recommended Next Steps\n"
-        analysis += "1. **Formal Interpretation**: Consult board-certified radiologist\n"
-        analysis += "2. **Clinical Correlation**: Discuss findings with treating provider\n"
-        analysis += "3. **Comparison**: Review with previous studies if available\n"
-        analysis += "4. **Follow-up**: Schedule additional imaging if clinically indicated\n"
-        
-        return analysis
+    # Check if API key is in Streamlit secrets
+    if 'GROQ_API_KEY' in st.secrets:
+        api_key = st.secrets['GROQ_API_KEY']
+        try:
+            groq_client = Groq(api_key=api_key)
+            # Test the connection
+            test_response = groq_client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[{"role": "user", "content": "Test"}],
+                max_tokens=5
+            )
+            st.session_state.groq_client = groq_client
+            st.session_state.api_configured = True
+            st.sidebar.markdown("<div class='api-status-connected'>✅ Groq API Connected (from secrets)</div>", unsafe_allow_html=True)
+            return groq_client
+        except Exception as e:
+            st.sidebar.markdown("<div class='api-status-disconnected'>❌ Groq API Error</div>", unsafe_allow_html=True)
+            st.sidebar.error(f"Error: {str(e)}")
     
-    def generate_patient_summary(self, patient_info, medical_history, current_findings):
-        """Generate comprehensive patient summary"""
-        analysis = "## 👨‍⚕️ Comprehensive Patient Assessment\n\n"
-        
-        analysis += "### 📋 Patient Overview\n"
-        analysis += f"{patient_info}\n\n"
-        
-        analysis += "### 🏥 Medical History Summary\n"
-        if medical_history and medical_history.strip():
-            analysis += f"{medical_history}\n\n"
-        else:
-            analysis += "No significant medical history provided.\n\n"
-        
-        analysis += "### 🔬 Current Clinical Picture\n"
-        analysis += "Based on available data and findings:\n\n"
-        
-        # Extract key information for assessment
-        if "hypertension" in medical_history.lower():
-            analysis += "- **Chronic Condition**: Hypertension - ongoing management required\n"
-        if "diabetes" in medical_history.lower():
-            analysis += "- **Chronic Condition**: Diabetes - glycemic control monitoring needed\n"
-        if "hyperlipidemia" in medical_history.lower():
-            analysis += "- **Chronic Condition**: Hyperlipidemia - lipid management indicated\n"
-        
-        analysis += "\n### 💊 Management Recommendations\n"
-        analysis += "**Immediate Actions**:\n"
-        analysis += "- Review all findings with appropriate specialists\n"
-        analysis += "- Address any critical values immediately\n"
-        analysis += "- Ensure patient understanding of health status\n\n"
-        
-        analysis += "**Short-term Plan**:\n"
-        analysis += "- Schedule follow-up based on test results\n"
-        analysis += "- Adjust medications if indicated\n"
-        analysis += "- Implement recommended lifestyle modifications\n\n"
-        
-        analysis += "**Long-term Strategy**:\n"
-        analysis += "- Regular monitoring of chronic conditions\n"
-        analysis += "- Preventive care and health maintenance\n"
-        analysis += "- Patient education and self-management support\n\n"
-        
-        analysis += "### ⚠️ Important Considerations\n"
-        analysis += "- Always correlate findings with clinical presentation\n"
-        analysis += "- Consider individual patient factors and preferences\n"
-        analysis += "- Monitor for medication side effects and interactions\n"
-        analysis += "- Address preventive health measures appropriately\n"
-        
-        return analysis
+    # Manual input as fallback
+    st.sidebar.info("Enter Groq API Key manually if not in secrets:")
+    manual_api_key = st.sidebar.text_input("Groq API Key:", type="password", key="manual_groq_key")
+    
+    if manual_api_key:
+        if st.sidebar.button("Connect API", key="connect_manual"):
+            try:
+                groq_client = Groq(api_key=manual_api_key)
+                # Test the connection
+                test_response = groq_client.chat.completions.create(
+                    model="llama3-70b-8192",
+                    messages=[{"role": "user", "content": "Test"}],
+                    max_tokens=5
+                )
+                st.session_state.groq_client = groq_client
+                st.session_state.api_configured = True
+                st.sidebar.success("✅ Groq API Connected Successfully!")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"❌ Connection failed: {str(e)}")
+    
+    return None
 
 def setup_sidebar():
     """Setup the professional medical sidebar"""
     with st.sidebar:
         st.markdown("<div class='medical-card'>", unsafe_allow_html=True)
         st.header("🏥 MediAI Pro")
-        st.markdown("**Advanced Medical AI Assistant**")
+        st.markdown("**AI-Powered Medical Assistant**")
+        if st.session_state.api_configured:
+            st.success("🤖 AI: **ACTIVE**")
+        else:
+            st.error("🤖 AI: **INACTIVE**")
         st.markdown("</div>", unsafe_allow_html=True)
         
         st.header("👤 Patient Information")
@@ -667,8 +582,12 @@ Lipid Panel: Total Cholesterol 185, LDL 110, HDL 45, Triglycerides 150""",
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🚀 **AI Analysis**", use_container_width=True, type="primary"):
-                st.session_state.analyze_clicked = True
+            analyze_disabled = not st.session_state.api_configured
+            if st.button("🚀 **AI Analysis**", use_container_width=True, type="primary", disabled=analyze_disabled):
+                if st.session_state.api_configured:
+                    st.session_state.analyze_clicked = True
+                else:
+                    st.sidebar.error("Please configure Groq API first")
         with col2:
             if st.button("🔄 **Clear All**", use_container_width=True):
                 st.session_state.analysis_results = {}
@@ -689,6 +608,12 @@ def display_medical_chat(analyzer, patient_context):
     """Display advanced medical chat interface"""
     st.header("💬 Dr. MedAI - Medical Conversation Assistant")
     
+    # API status indicator
+    if st.session_state.api_configured:
+        st.success("✅ AI Assistant: **ACTIVE** - You can now have natural medical conversations")
+    else:
+        st.error("❌ AI Assistant: **INACTIVE** - Configure Groq API in sidebar to enable conversations")
+    
     # Chat container
     st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
     
@@ -705,12 +630,13 @@ def display_medical_chat(analyzer, patient_context):
     user_input = st.text_input(
         "Ask about symptoms, medications, test results, or general health concerns:",
         placeholder="Describe your symptoms or ask a medical question...",
-        key="chat_input"
+        key="chat_input",
+        disabled=not st.session_state.api_configured
     )
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns([3, 1])
     with col1:
-        if st.button("Send Message", use_container_width=True) and user_input:
+        if st.button("Send Message", use_container_width=True, disabled=not st.session_state.api_configured) and user_input:
             process_user_message(analyzer, user_input, patient_context)
     with col2:
         if st.button("Clear Chat", use_container_width=True):
@@ -718,24 +644,21 @@ def display_medical_chat(analyzer, patient_context):
             st.rerun()
     
     # Quick action buttons
-    st.subheader("💡 Quick Medical Questions")
-    quick_col1, quick_col2, quick_col3, quick_col4 = st.columns(4)
-    
-    with quick_col1:
-        if st.button("🤒 Common Symptoms", use_container_width=True):
-            process_user_message(analyzer, "Can you explain common symptoms and when to seek medical attention?", patient_context)
-    
-    with quick_col2:
-        if st.button("💊 Medication Info", use_container_width=True):
-            process_user_message(analyzer, "What should I know about medication safety and management?", patient_context)
-    
-    with quick_col3:
-        if st.button("🩺 Test Results", use_container_width=True):
-            process_user_message(analyzer, "How should I understand and interpret medical test results?", patient_context)
-    
-    with quick_col4:
-        if st.button("🍎 Health Advice", use_container_width=True):
-            process_user_message(analyzer, "What are some general health and wellness recommendations?", patient_context)
+    if st.session_state.api_configured:
+        st.subheader("💡 Quick Medical Questions")
+        quick_col1, quick_col2 = st.columns(2)
+        
+        with quick_col1:
+            if st.button("🤒 Discuss Symptoms", use_container_width=True):
+                process_user_message(analyzer, "I'd like to discuss some symptoms I'm experiencing. Can you help me understand when to seek medical attention?", patient_context)
+            if st.button("💊 Medication Questions", use_container_width=True):
+                process_user_message(analyzer, "I have questions about medication safety and management. What should I know?", patient_context)
+        
+        with quick_col2:
+            if st.button("🩺 Test Results Help", use_container_width=True):
+                process_user_message(analyzer, "Can you help me understand how to interpret common medical test results?", patient_context)
+            if st.button("🍎 Health & Wellness", use_container_width=True):
+                process_user_message(analyzer, "What are some evidence-based recommendations for maintaining good health and preventing disease?", patient_context)
 
 def process_user_message(analyzer, user_input, patient_context):
     """Process user message and generate AI response"""
@@ -743,7 +666,7 @@ def process_user_message(analyzer, user_input, patient_context):
     st.session_state.messages.append({"role": "user", "content": user_input})
     
     # Generate AI response
-    with st.spinner("Dr. MedAI is analyzing..."):
+    with st.spinner("Dr. MedAI is analyzing your question..."):
         ai_response = analyzer.chat_with_medical_ai(
             user_input, 
             st.session_state.messages,
@@ -761,13 +684,14 @@ def display_analysis_dashboard(analyzer):
     
     if not st.session_state.analysis_results:
         st.info("""
-        🏥 **Welcome to MediAI Pro - Advanced Medical AI Assistant**
+        🏥 **Welcome to MediAI Pro - AI-Powered Medical Assistant**
         
         To begin comprehensive medical analysis:
-        1. Enter patient information in the sidebar
-        2. Upload or paste medical data (lab results, images, reports)
-        3. Click **'AI Analysis'** in the sidebar
-        4. Use the chat for medical conversations and questions
+        1. ✅ Configure Groq API in the sidebar (essential for AI features)
+        2. 👤 Enter patient information
+        3. 📁 Upload or paste medical data
+        4. 🚀 Click **'AI Analysis'** for comprehensive analysis
+        5. 💬 Use the chat for natural medical conversations
         """)
         return
     
@@ -787,28 +711,146 @@ def display_analysis_dashboard(analyzer):
         st.metric("Clinical Urgency", urgency)
     
     with col3:
-        st.metric("Findings", f"{len([r for r in results_text.split() if 'abnormal' in r or 'critical' in r])} noted")
+        st.metric("AI Powered", "Yes" if st.session_state.api_configured else "No")
     
     with col4:
         st.metric("Report Status", "Ready")
     
     # Detailed Analysis Sections
     if 'lab_analysis' in st.session_state.analysis_results:
-        with st.expander("🔬 **Laboratory Results Analysis**", expanded=True):
+        with st.expander("🔬 **AI Laboratory Analysis**", expanded=True):
             st.markdown(st.session_state.analysis_results['lab_analysis'])
     
     if 'image_analysis' in st.session_state.analysis_results:
-        with st.expander("🖼️ **Medical Image Analysis**", expanded=True):
+        with st.expander("🖼️ **AI Image Analysis**", expanded=True):
             st.markdown(st.session_state.analysis_results['image_analysis'])
     
     if 'patient_summary' in st.session_state.analysis_results:
-        with st.expander("👨‍⚕️ **Comprehensive Patient Assessment**", expanded=True):
+        with st.expander("👨‍⚕️ **AI Patient Assessment**", expanded=True):
             st.markdown(st.session_state.analysis_results['patient_summary'])
+
+def main():
+    # Professional Header
+    st.markdown("<h1 class='main-header'>🏥 MediAI Pro</h1>", unsafe_allow_html=True)
+    st.markdown("<h2 class='sub-header'>Advanced AI-Powered Medical Assistant</h2>", unsafe_allow_html=True)
+    
+    # Setup Groq API
+    groq_client = setup_groq_api()
+    
+    # Initialize analyzer with Groq client
+    analyzer = MedicalAIAnalyzer(groq_client)
+    
+    # Setup sidebar and get patient data
+    patient_data = setup_sidebar()
+    
+    # Perform analysis if requested
+    if hasattr(st.session_state, 'analyze_clicked') and st.session_state.analyze_clicked:
+        with st.spinner("🔄 Performing AI-powered medical analysis..."):
+            analysis_results = {}
+            
+            # Analyze laboratory data
+            if patient_data['lab_data']:
+                analysis_results['lab_analysis'] = analyzer.analyze_lab_results(patient_data['lab_data'])
+            
+            # Analyze medical images
+            if patient_data['image_description']:
+                analysis_results['image_analysis'] = analyzer.analyze_medical_image(patient_data['image_description'])
+            
+            # Generate patient summary
+            analysis_results['patient_summary'] = analyzer.generate_patient_summary(
+                patient_data['patient_info'], 
+                patient_data['medical_history'],
+                f"Lab: {patient_data['lab_data'][:200]}, Imaging: {patient_data['image_description'][:200]}"
+            )
+            
+            st.session_state.analysis_results = analysis_results
+            st.session_state.analyze_clicked = False
+            
+        st.success("✅ AI-powered medical analysis completed successfully!")
+    
+    # Main content tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["💬 AI Chat", "📊 Dashboard", "📈 Analytics", "📋 Report"])
+    
+    with tab1:
+        display_medical_chat(analyzer, patient_data['patient_context'])
+    
+    with tab2:
+        display_analysis_dashboard(analyzer)
+    
+    with tab3:
+        st.header("📈 Medical Analytics")
+        create_advanced_visualizations()
+    
+    with tab4:
+        st.header("📋 AI-Generated Medical Report")
+        if st.session_state.analysis_results:
+            report_content = f"""
+# 🏥 AI-POWERED MEDICAL ANALYSIS REPORT
+
+## Patient Information
+{patient_data['patient_info']}
+
+## Executive Summary
+Comprehensive medical analysis performed using advanced AI (Groq Llama 3 70B) with professional medical knowledge base.
+
+## Detailed Analysis
+
+### Laboratory Findings
+{st.session_state.analysis_results.get('lab_analysis', 'No laboratory analysis available')}
+
+### Imaging Analysis  
+{st.session_state.analysis_results.get('image_analysis', 'No imaging analysis available')}
+
+### Patient Assessment
+{st.session_state.analysis_results.get('patient_summary', 'No patient summary available')}
+
+## AI Clinical Recommendations
+
+### Immediate Actions
+- Review all AI-generated findings with qualified healthcare providers
+- Address any critical or urgent findings promptly
+- Ensure comprehensive understanding of health status
+
+### Follow-up Plan
+- Schedule appropriate specialist consultations based on findings
+- Implement recommended monitoring and testing
+- Adjust treatment plans as clinically indicated
+
+### Long-term Health Strategy
+- Continue management of chronic conditions
+- Focus on evidence-based preventive care
+- Regular health maintenance and screening
+
+---
+*Generated by MediAI Pro with Groq AI Assistant on {datetime.now().strftime('%B %d, %Y at %H:%M')}*
+
+**Medical Disclaimer**: This AI-generated report provides general medical information and should be reviewed by qualified healthcare professionals. Always seek professional medical advice for personal health concerns and treatment decisions.
+"""
+            st.markdown(report_content)
+            
+            # Download options
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="📥 Download Full Report",
+                    data=report_content,
+                    file_name=f"Medical_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
+            with col2:
+                st.download_button(
+                    label="📊 Export Analysis Data",
+                    data=json.dumps(st.session_state.analysis_results, indent=2),
+                    file_name=f"Analysis_Data_{datetime.now().strftime('%Y%m%d')}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+        else:
+            st.info("Generate AI analysis first to view the comprehensive medical report.")
 
 def create_advanced_visualizations():
     """Create professional medical visualizations"""
-    st.header("📈 Advanced Medical Analytics")
-    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -852,122 +894,6 @@ def create_advanced_visualizations():
             height=400
         )
         st.plotly_chart(fig, use_container_width=True)
-
-def main():
-    # Professional Header
-    st.markdown("<h1 class='main-header'>🏥 MediAI Pro</h1>", unsafe_allow_html=True)
-    st.markdown("<h2 class='sub-header'>Advanced AI-Powered Medical Assistant</h2>", unsafe_allow_html=True)
-    
-    # Initialize analyzer
-    analyzer = MedicalAIAnalyzer()
-    
-    # Setup sidebar and get patient data
-    patient_data = setup_sidebar()
-    
-    # Perform analysis if requested
-    if hasattr(st.session_state, 'analyze_clicked') and st.session_state.analyze_clicked:
-        with st.spinner("🔄 Performing comprehensive medical analysis..."):
-            analysis_results = {}
-            
-            # Analyze laboratory data
-            if patient_data['lab_data']:
-                analysis_results['lab_analysis'] = analyzer.analyze_lab_results(patient_data['lab_data'])
-            
-            # Analyze medical images
-            if patient_data['image_description']:
-                analysis_results['image_analysis'] = analyzer.analyze_medical_image(patient_data['image_description'])
-            
-            # Generate patient summary
-            analysis_results['patient_summary'] = analyzer.generate_patient_summary(
-                patient_data['patient_info'], 
-                patient_data['medical_history'],
-                f"Lab: {patient_data['lab_data'][:200]}, Imaging: {patient_data['image_description'][:200]}"
-            )
-            
-            st.session_state.analysis_results = analysis_results
-            st.session_state.analyze_clicked = False
-            
-        st.success("✅ Comprehensive medical analysis completed successfully!")
-    
-    # Main content tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["💬 AI Chat", "📊 Dashboard", "📈 Analytics", "📋 Report"])
-    
-    with tab1:
-        display_medical_chat(analyzer, patient_data['patient_context'])
-    
-    with tab2:
-        display_analysis_dashboard(analyzer)
-    
-    with tab3:
-        create_advanced_visualizations()
-    
-    with tab4:
-        st.header("📋 Comprehensive Medical Report")
-        if st.session_state.analysis_results:
-            report_content = f"""
-# 🏥 COMPREHENSIVE MEDICAL ANALYSIS REPORT
-
-## Patient Information
-{patient_data['patient_info']}
-
-## Executive Summary
-Comprehensive medical analysis completed using advanced medical knowledge base and pattern recognition.
-
-## Detailed Analysis
-
-### Laboratory Findings
-{st.session_state.analysis_results.get('lab_analysis', 'No laboratory analysis available')}
-
-### Imaging Analysis  
-{st.session_state.analysis_results.get('image_analysis', 'No imaging analysis available')}
-
-### Patient Assessment
-{st.session_state.analysis_results.get('patient_summary', 'No patient summary available')}
-
-## Clinical Recommendations
-
-### Immediate Actions
-- Review all findings with healthcare providers
-- Address any critical or abnormal results
-- Ensure patient understanding of health status
-
-### Follow-up Plan
-- Schedule appropriate specialist consultations
-- Implement recommended monitoring
-- Adjust treatment plans as needed
-
-### Long-term Management
-- Continue chronic condition management
-- Focus on preventive health measures
-- Regular health maintenance and screening
-
----
-*Generated by MediAI Pro Advanced Medical Assistant on {datetime.now().strftime('%B %d, %Y at %H:%M')}*
-
-**Disclaimer**: This report provides general medical information and should be reviewed by qualified healthcare professionals. Always seek professional medical advice for personal health concerns.
-"""
-            st.markdown(report_content)
-            
-            # Download options
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    label="📥 Download Full Report",
-                    data=report_content,
-                    file_name=f"Medical_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
-            with col2:
-                st.download_button(
-                    label="📊 Export Analysis Data",
-                    data=json.dumps(st.session_state.analysis_results, indent=2),
-                    file_name=f"Analysis_Data_{datetime.now().strftime('%Y%m%d')}.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
-        else:
-            st.info("Generate medical analysis first to view the comprehensive report.")
 
 if __name__ == "__main__":
     main()
