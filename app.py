@@ -32,20 +32,22 @@ if 'api_key_configured' not in st.session_state:
 class MedicalChatbot:
     def __init__(self, api_key=None):
         if api_key:
-            self.client = openai.OpenAI(api_key=api_key)
+            openai.api_key = api_key
             self.api_key = api_key
+            self.client_configured = True
         else:
-            self.client = None
+            self.client_configured = False
             self.api_key = None
     
     def set_api_key(self, api_key):
         """Set API key after initialization"""
-        self.client = openai.OpenAI(api_key=api_key)
+        openai.api_key = api_key
         self.api_key = api_key
+        self.client_configured = True
     
     def analyze_lab_results(self, lab_data):
         """Analyze laboratory test results"""
-        if not self.client:
+        if not self.client_configured:
             return "Please configure API key first"
         
         try:
@@ -63,8 +65,8 @@ class MedicalChatbot:
             Format the response in a structured way for medical professionals.
             """
             
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",  # Using 3.5 for cost efficiency
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a medical expert analyzing laboratory results. Provide accurate, evidence-based analysis."},
                     {"role": "user", "content": prompt}
@@ -79,7 +81,7 @@ class MedicalChatbot:
     
     def analyze_medical_image(self, image_data, image_type):
         """Analyze medical images"""
-        if not self.client:
+        if not self.client_configured:
             return "Please configure API key first"
         
         try:
@@ -95,7 +97,7 @@ class MedicalChatbot:
             4. Recommended next steps
             """
             
-            response = self.client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a radiologist analyzing medical images. Provide professional medical insights."},
@@ -111,7 +113,7 @@ class MedicalChatbot:
     
     def generate_patient_summary(self, patient_info, medical_history, current_findings):
         """Generate comprehensive patient summary"""
-        if not self.client:
+        if not self.client_configured:
             return "Please configure API key first"
         
         try:
@@ -130,7 +132,7 @@ class MedicalChatbot:
             5. Patient education points
             """
             
-            response = self.client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are an experienced physician creating patient summaries."},
@@ -146,11 +148,11 @@ class MedicalChatbot:
     
     def chat_response(self, messages):
         """Generate chat response"""
-        if not self.client:
+        if not self.client_configured:
             return "Please configure API key first to use the chat feature."
         
         try:
-            response = self.client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": """You are a medical assistant for doctors. 
@@ -408,7 +410,7 @@ Lipid Panel: Total Cholesterol 185, LDL 110, HDL 45, Triglycerides 150"""
             report_content = f"""
 # Medical Analysis Report
 
-**Patient:** {st.session_state.get('patient_name', 'John Doe')}  
+**Patient:** {patient_name}  
 **Date:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}
 
 ## Laboratory Analysis
