@@ -171,28 +171,12 @@ def setup_api_configuration():
     """API configuration section"""
     st.sidebar.header("🔑 API Configuration")
     
-    # Debug: Show what's in secrets
-    st.sidebar.write("🔍 Debug Secrets Info:")
-    
-    # Check if secrets are loaded
-    if hasattr(st, 'secrets'):
-        secrets_keys = list(st.secrets.keys()) if st.secrets else []
-        st.sidebar.write(f"Secrets keys found: {secrets_keys}")
-        
-        # Option 1: Streamlit secrets (recommended for cloud)
-        if 'OPENAI_API_KEY' in st.secrets:
-            api_key = st.secrets['OPENAI_API_KEY']
-            if api_key and api_key.startswith('sk-'):
-                st.sidebar.success("✅ API key loaded from Streamlit secrets!")
-                st.sidebar.write(f"Key preview: {api_key[:20]}...")
-                return api_key
-            else:
-                st.sidebar.error("❌ API key found but format is invalid")
-                st.sidebar.write(f"Key value: {api_key}")
-        else:
-            st.sidebar.warning("⚠️ OPENAI_API_KEY not found in secrets")
-    else:
-        st.sidebar.error("❌ Secrets not available")
+    # Option 1: Streamlit secrets (recommended for cloud)
+    if 'OPENAI_API_KEY' in st.secrets:
+        api_key = st.secrets['OPENAI_API_KEY']
+        if api_key and api_key.startswith('sk-'):
+            st.sidebar.success("✅ API key loaded from Streamlit secrets!")
+            return api_key
     
     # Option 2: Manual input as fallback
     st.sidebar.info("Configure your OpenAI API key manually")
@@ -298,13 +282,6 @@ def main():
             
             Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
             """)
-            
-            # Show deployment status
-            with st.expander("Deployment Status"):
-                st.write("Python Version:", os.sys.version)
-                st.write("OpenAI Version:", openai.__version__)
-                st.write("Streamlit Version:", st.__version__)
-            
             return
         
         # Initialize chatbot with API key
@@ -337,8 +314,8 @@ def main():
                 "Paste Lab Results", 
                 height=100,
                 value="""CBC: WBC 8.2, RBC 4.5, Hgb 14.2, Hct 42%, Platelets 250
-    Chemistry: Glucose 110, Creatinine 1.1, BUN 18, ALT 25, AST 22
-    Lipid Panel: Total Cholesterol 185, LDL 110, HDL 45, Triglycerides 150"""
+Chemistry: Glucose 110, Creatinine 1.1, BUN 18, ALT 25, AST 22
+Lipid Panel: Total Cholesterol 185, LDL 110, HDL 45, Triglycerides 150"""
             )
             
             # Medical image section
@@ -379,37 +356,37 @@ def main():
                     st.session_state.analysis_results = {}
                     st.session_state.messages = []
                     st.rerun()
+
+        # MAIN CONTENT AREA - CHAT INPUT MUST BE AT ROOT LEVEL
+        st.header("💬 Medical Chat Assistant")
         
-        # Main content area
-        tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "📈 Analytics", "📋 Report"])
+        # Display chat messages
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        
+        # Chat input - AT ROOT LEVEL (not inside any container)
+        if prompt := st.chat_input("Ask about patient analysis or medical queries..."):
+            # Add user message to chat history
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            
+            # Display user message
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            
+            # Generate AI response
+            with st.chat_message("assistant"):
+                with st.spinner("Analyzing..."):
+                    ai_response = chatbot.chat_response(st.session_state.messages)
+                    st.markdown(ai_response)
+                    
+                    # Add AI response to chat history
+                    st.session_state.messages.append({"role": "assistant", "content": ai_response})
+
+        # Tabs for other features (without chat input inside)
+        tab1, tab2 = st.tabs(["📈 Analytics Dashboard", "📋 Medical Report"])
         
         with tab1:
-            st.header("Medical Chat Assistant")
-            
-            # Display chat messages
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-            
-            # Chat input
-            if prompt := st.chat_input("Ask about patient analysis or medical queries..."):
-                # Add user message to chat history
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                
-                # Display user message
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-                
-                # Generate AI response
-                with st.chat_message("assistant"):
-                    with st.spinner("Analyzing..."):
-                        ai_response = chatbot.chat_response(st.session_state.messages)
-                        st.markdown(ai_response)
-                        
-                        # Add AI response to chat history
-                        st.session_state.messages.append({"role": "assistant", "content": ai_response})
-        
-        with tab2:
             display_analysis_dashboard()
             
             # Visualizations
@@ -435,28 +412,28 @@ def main():
                 fig.update_layout(title='Vital Signs Monitoring')
                 st.plotly_chart(fig, use_container_width=True)
         
-        with tab3:
+        with tab2:
             st.header("📋 Medical Report")
             
             if st.session_state.analysis_results:
                 report_content = f"""
-    # Medical Analysis Report
+# Medical Analysis Report
 
-    **Patient:** {patient_name}  
-    **Date:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}
+**Patient:** {patient_name}  
+**Date:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}
 
-    ## Laboratory Analysis
-    {st.session_state.analysis_results.get('lab_analysis', 'N/A')}
+## Laboratory Analysis
+{st.session_state.analysis_results.get('lab_analysis', 'N/A')}
 
-    ## Imaging Analysis  
-    {st.session_state.analysis_results.get('image_analysis', 'N/A')}
+## Imaging Analysis  
+{st.session_state.analysis_results.get('image_analysis', 'N/A')}
 
-    ## Patient Summary
-    {st.session_state.analysis_results.get('patient_summary', 'N/A')}
+## Patient Summary
+{st.session_state.analysis_results.get('patient_summary', 'N/A')}
 
-    ---
-    *Generated by MediAI - AI Medical Assistant*
-    """
+---
+*Generated by MediAI - AI Medical Assistant*
+"""
                 
                 st.markdown(report_content)
                 
