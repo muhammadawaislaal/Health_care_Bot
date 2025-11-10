@@ -15,7 +15,12 @@ import tempfile
 from datetime import datetime
 import logging
 import re
-from groq import Groq  # Corrected import
+
+try:
+    import groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -231,9 +236,9 @@ class MedicalAIAnalyzer:
 
             # Get response from Groq
             response = self.groq_client.chat.completions.create(
-                model="llama3-70b-8192",  # Using powerful 70B model for medical reasoning
+                model="llama3-70b-8192",
                 messages=messages,
-                temperature=0.3,  # Lower temperature for more consistent medical responses
+                temperature=0.3,
                 max_tokens=1500,
                 top_p=0.9,
                 stream=False
@@ -246,7 +251,7 @@ class MedicalAIAnalyzer:
             return f"⚠️ **I'm experiencing technical difficulties**\n\nError: {str(e)}\n\nPlease try again in a moment or check your API configuration."
 
     def analyze_lab_results(self, lab_data):
-        """AI-powered laboratory results analysis using Groq"""
+        """AI-powered laboratory results analysis"""
         if not self.groq_client:
             return self._basic_lab_analysis(lab_data)
         
@@ -314,7 +319,7 @@ class MedicalAIAnalyzer:
         return analysis
     
     def analyze_medical_image(self, image_description):
-        """AI-powered medical image analysis using Groq"""
+        """AI-powered medical image analysis"""
         if not self.groq_client:
             return self._basic_image_analysis(image_description)
         
@@ -371,7 +376,7 @@ class MedicalAIAnalyzer:
         return analysis
     
     def generate_patient_summary(self, patient_info, medical_history, current_findings):
-        """AI-powered comprehensive patient summary using Groq"""
+        """AI-powered comprehensive patient summary"""
         if not self.groq_client:
             return self._basic_patient_summary(patient_info, medical_history, current_findings)
         
@@ -470,11 +475,15 @@ def setup_groq_api():
     """Setup Groq API configuration"""
     st.sidebar.header("🔑 API Configuration")
     
+    if not GROQ_AVAILABLE:
+        st.sidebar.error("❌ Groq library not installed. Please install it using: pip install groq")
+        return None
+    
     # Check if API key is in Streamlit secrets
     if 'GROQ_API_KEY' in st.secrets:
         api_key = st.secrets['GROQ_API_KEY']
         try:
-            groq_client = Groq(api_key=api_key)
+            groq_client = groq.Groq(api_key=api_key)
             # Test the connection
             test_response = groq_client.chat.completions.create(
                 model="llama3-70b-8192",
@@ -496,7 +505,7 @@ def setup_groq_api():
     if manual_api_key:
         if st.sidebar.button("Connect API", key="connect_manual"):
             try:
-                groq_client = Groq(api_key=manual_api_key)
+                groq_client = groq.Groq(api_key=manual_api_key)
                 # Test the connection
                 test_response = groq_client.chat.completions.create(
                     model="llama3-70b-8192",
