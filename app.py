@@ -32,18 +32,17 @@ if 'api_key_configured' not in st.session_state:
 class MedicalChatbot:
     def __init__(self, api_key=None):
         if api_key:
-            openai.api_key = api_key
-            self.api_key = api_key
-            self.client_configured = True
+            try:
+                openai.api_key = api_key
+                self.api_key = api_key
+                self.client_configured = True
+                st.sidebar.success("✅ OpenAI client configured successfully!")
+            except Exception as e:
+                st.sidebar.error(f"❌ Error configuring OpenAI: {str(e)}")
+                self.client_configured = False
         else:
             self.client_configured = False
             self.api_key = None
-    
-    def set_api_key(self, api_key):
-        """Set API key after initialization"""
-        openai.api_key = api_key
-        self.api_key = api_key
-        self.client_configured = True
     
     def analyze_lab_results(self, lab_data):
         """Analyze laboratory test results"""
@@ -172,21 +171,41 @@ def setup_api_configuration():
     """API configuration section"""
     st.sidebar.header("🔑 API Configuration")
     
-    # Option 1: Streamlit secrets (recommended for cloud)
-    if 'OPENAI_API_KEY' in st.secrets:
-        api_key = st.secrets['OPENAI_API_KEY']
-        st.sidebar.success("API key loaded from Streamlit secrets!")
-        return api_key
+    # Debug: Show what's in secrets
+    st.sidebar.write("🔍 Debug Secrets Info:")
     
-    # Option 2: Manual input
-    st.sidebar.info("Configure your OpenAI API key")
+    # Check if secrets are loaded
+    if hasattr(st, 'secrets'):
+        secrets_keys = list(st.secrets.keys()) if st.secrets else []
+        st.sidebar.write(f"Secrets keys found: {secrets_keys}")
+        
+        # Option 1: Streamlit secrets (recommended for cloud)
+        if 'OPENAI_API_KEY' in st.secrets:
+            api_key = st.secrets['OPENAI_API_KEY']
+            if api_key and api_key.startswith('sk-'):
+                st.sidebar.success("✅ API key loaded from Streamlit secrets!")
+                st.sidebar.write(f"Key preview: {api_key[:20]}...")
+                return api_key
+            else:
+                st.sidebar.error("❌ API key found but format is invalid")
+                st.sidebar.write(f"Key value: {api_key}")
+        else:
+            st.sidebar.warning("⚠️ OPENAI_API_KEY not found in secrets")
+    else:
+        st.sidebar.error("❌ Secrets not available")
+    
+    # Option 2: Manual input as fallback
+    st.sidebar.info("Configure your OpenAI API key manually")
     api_key = st.sidebar.text_input("Enter OpenAI API Key:", type="password")
     
     if api_key:
         if st.sidebar.button("Save API Key"):
-            st.session_state.api_key_configured = True
-            st.sidebar.success("API key configured!")
-            return api_key
+            if api_key.startswith('sk-'):
+                st.session_state.api_key_configured = True
+                st.sidebar.success("API key configured!")
+                return api_key
+            else:
+                st.sidebar.error("Invalid API key format. Should start with 'sk-'")
     
     return None
 
@@ -260,183 +279,200 @@ def create_sample_lab_chart():
     return fig
 
 def main():
-    st.title("🏥 MediAI - Doctor's Assistant")
-    st.markdown("AI-powered medical analysis and patient report interpretation")
-    
-    # API Configuration
-    api_key = setup_api_configuration()
-    
-    if not api_key:
-        st.warning("""
-        🔑 **API Configuration Required**
+    try:
+        st.title("🏥 MediAI - Doctor's Assistant")
+        st.markdown("AI-powered medical analysis and patient report interpretation")
         
-        To use MediAI, you need to configure your OpenAI API key:
+        # API Configuration
+        api_key = setup_api_configuration()
         
-        1. **Recommended**: Add `OPENAI_API_KEY` to Streamlit secrets (see deployment guide)
-        2. **Alternative**: Enter your API key in the sidebar
-        
-        Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-        """)
-        return
-    
-    # Initialize chatbot with API key
-    chatbot = MedicalChatbot(api_key)
-    
-    # Sidebar for patient information
-    with st.sidebar:
-        st.header("👤 Patient Information")
-        
-        patient_id = st.text_input("Patient ID", value="PT-001")
-        patient_name = st.text_input("Patient Name", value="John Doe")
-        patient_age = st.number_input("Age", min_value=0, max_value=120, value=45)
-        patient_gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-        
-        st.header("📋 Medical History")
-        medical_history = st.text_area(
-            "Enter medical history", 
-            value="Hypertension, Type 2 Diabetes, Hyperlipidemia"
-        )
-        
-        st.header("📊 Upload Reports")
-        
-        # Lab results section
-        st.subheader("Laboratory Results")
-        lab_results = st.text_area(
-            "Paste Lab Results", 
-            height=100,
-            value="""CBC: WBC 8.2, RBC 4.5, Hgb 14.2, Hct 42%, Platelets 250
-Chemistry: Glucose 110, Creatinine 1.1, BUN 18, ALT 25, AST 22
-Lipid Panel: Total Cholesterol 185, LDL 110, HDL 45, Triglycerides 150"""
-        )
-        
-        # Medical image section
-        st.subheader("Medical Imaging")
-        image_description = st.text_area(
-            "Image Findings/Description", 
-            height=100,
-            value="Chest X-ray: Mild cardiomegaly, clear lung fields, no active disease"
-        )
-        
-        analyze_col1, analyze_col2 = st.columns(2)
-        
-        with analyze_col1:
-            if st.button("🚀 Analyze All", type="primary"):
-                with st.spinner("Analyzing patient data..."):
-                    # Analyze lab results
-                    if lab_results:
-                        analysis = chatbot.analyze_lab_results(lab_results)
-                        st.session_state.analysis_results['lab_analysis'] = analysis
-                    
-                    # Analyze medical image
-                    if image_description:
-                        analysis = chatbot.analyze_medical_image(image_description, "X-Ray")
-                        st.session_state.analysis_results['image_analysis'] = analysis
-                    
-                    # Generate patient summary
-                    patient_info = f"Name: {patient_name}, Age: {patient_age}, Gender: {patient_gender}"
-                    summary = chatbot.generate_patient_summary(
-                        patient_info, medical_history, 
-                        f"Lab: {lab_results}, Image: {image_description}"
-                    )
-                    st.session_state.analysis_results['patient_summary'] = summary
-                    
-                    st.success("Analysis complete! Check the dashboard.")
-        
-        with analyze_col2:
-            if st.button("Clear Results"):
-                st.session_state.analysis_results = {}
-                st.session_state.messages = []
-                st.rerun()
-    
-    # Main content area
-    tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "📈 Analytics", "📋 Report"])
-    
-    with tab1:
-        st.header("Medical Chat Assistant")
-        
-        # Display chat messages
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-        
-        # Chat input
-        if prompt := st.chat_input("Ask about patient analysis or medical queries..."):
-            # Add user message to chat history
-            st.session_state.messages.append({"role": "user", "content": prompt})
+        if not api_key:
+            st.warning("""
+            🔑 **API Configuration Required**
             
-            # Display user message
-            with st.chat_message("user"):
-                st.markdown(prompt)
+            To use MediAI, you need to configure your OpenAI API key:
             
-            # Generate AI response
-            with st.chat_message("assistant"):
-                with st.spinner("Analyzing..."):
-                    ai_response = chatbot.chat_response(st.session_state.messages)
-                    st.markdown(ai_response)
-                    
-                    # Add AI response to chat history
-                    st.session_state.messages.append({"role": "assistant", "content": ai_response})
-    
-    with tab2:
-        display_analysis_dashboard()
-        
-        # Visualizations
-        st.header("📊 Medical Visualizations")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Laboratory Trends")
-            lab_chart = create_sample_lab_chart()
-            st.plotly_chart(lab_chart, use_container_width=True)
-        
-        with col2:
-            st.subheader("Vital Signs Monitor")
-            time_points = ['08:00', '12:00', '16:00', '20:00', '00:00']
-            heart_rate = [72, 75, 80, 78, 70]
-            blood_pressure_sys = [120, 118, 122, 119, 121]
+            1. **Recommended**: Add `OPENAI_API_KEY` to Streamlit secrets 
+            2. **Check**: Make sure your API key starts with `sk-`
+            3. **Alternative**: Enter your API key in the sidebar
             
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=time_points, y=heart_rate, mode='lines+markers', name='Heart Rate'))
-            fig.add_trace(go.Scatter(x=time_points, y=blood_pressure_sys, mode='lines+markers', name='BP Systolic'))
+            Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+            """)
             
-            fig.update_layout(title='Vital Signs Monitoring')
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with tab3:
-        st.header("📋 Medical Report")
+            # Show deployment status
+            with st.expander("Deployment Status"):
+                st.write("Python Version:", os.sys.version)
+                st.write("OpenAI Version:", openai.__version__)
+                st.write("Streamlit Version:", st.__version__)
+            
+            return
         
-        if st.session_state.analysis_results:
-            report_content = f"""
-# Medical Analysis Report
-
-**Patient:** {patient_name}  
-**Date:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}
-
-## Laboratory Analysis
-{st.session_state.analysis_results.get('lab_analysis', 'N/A')}
-
-## Imaging Analysis  
-{st.session_state.analysis_results.get('image_analysis', 'N/A')}
-
-## Patient Summary
-{st.session_state.analysis_results.get('patient_summary', 'N/A')}
-
----
-*Generated by MediAI - AI Medical Assistant*
-"""
+        # Initialize chatbot with API key
+        chatbot = MedicalChatbot(api_key)
+        
+        if not chatbot.client_configured:
+            st.error("Failed to initialize OpenAI client. Please check your API key.")
+            return
+        
+        # Sidebar for patient information
+        with st.sidebar:
+            st.header("👤 Patient Information")
             
-            st.markdown(report_content)
+            patient_id = st.text_input("Patient ID", value="PT-001")
+            patient_name = st.text_input("Patient Name", value="John Doe")
+            patient_age = st.number_input("Age", min_value=0, max_value=120, value=45)
+            patient_gender = st.selectbox("Gender", ["Male", "Female", "Other"])
             
-            # Download button
-            st.download_button(
-                label="📥 Download Report",
-                data=report_content,
-                file_name=f"medical_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.md",
-                mime="text/markdown"
+            st.header("📋 Medical History")
+            medical_history = st.text_area(
+                "Enter medical history", 
+                value="Hypertension, Type 2 Diabetes, Hyperlipidemia"
             )
-        else:
-            st.info("Generate analysis first to view the report")
+            
+            st.header("📊 Upload Reports")
+            
+            # Lab results section
+            st.subheader("Laboratory Results")
+            lab_results = st.text_area(
+                "Paste Lab Results", 
+                height=100,
+                value="""CBC: WBC 8.2, RBC 4.5, Hgb 14.2, Hct 42%, Platelets 250
+    Chemistry: Glucose 110, Creatinine 1.1, BUN 18, ALT 25, AST 22
+    Lipid Panel: Total Cholesterol 185, LDL 110, HDL 45, Triglycerides 150"""
+            )
+            
+            # Medical image section
+            st.subheader("Medical Imaging")
+            image_description = st.text_area(
+                "Image Findings/Description", 
+                height=100,
+                value="Chest X-ray: Mild cardiomegaly, clear lung fields, no active disease"
+            )
+            
+            analyze_col1, analyze_col2 = st.columns(2)
+            
+            with analyze_col1:
+                if st.button("🚀 Analyze All", type="primary"):
+                    with st.spinner("Analyzing patient data..."):
+                        # Analyze lab results
+                        if lab_results:
+                            analysis = chatbot.analyze_lab_results(lab_results)
+                            st.session_state.analysis_results['lab_analysis'] = analysis
+                        
+                        # Analyze medical image
+                        if image_description:
+                            analysis = chatbot.analyze_medical_image(image_description, "X-Ray")
+                            st.session_state.analysis_results['image_analysis'] = analysis
+                        
+                        # Generate patient summary
+                        patient_info = f"Name: {patient_name}, Age: {patient_age}, Gender: {patient_gender}"
+                        summary = chatbot.generate_patient_summary(
+                            patient_info, medical_history, 
+                            f"Lab: {lab_results}, Image: {image_description}"
+                        )
+                        st.session_state.analysis_results['patient_summary'] = summary
+                        
+                        st.success("Analysis complete! Check the dashboard.")
+            
+            with analyze_col2:
+                if st.button("Clear Results"):
+                    st.session_state.analysis_results = {}
+                    st.session_state.messages = []
+                    st.rerun()
+        
+        # Main content area
+        tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "📈 Analytics", "📋 Report"])
+        
+        with tab1:
+            st.header("Medical Chat Assistant")
+            
+            # Display chat messages
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+            
+            # Chat input
+            if prompt := st.chat_input("Ask about patient analysis or medical queries..."):
+                # Add user message to chat history
+                st.session_state.messages.append({"role": "user", "content": prompt})
+                
+                # Display user message
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                # Generate AI response
+                with st.chat_message("assistant"):
+                    with st.spinner("Analyzing..."):
+                        ai_response = chatbot.chat_response(st.session_state.messages)
+                        st.markdown(ai_response)
+                        
+                        # Add AI response to chat history
+                        st.session_state.messages.append({"role": "assistant", "content": ai_response})
+        
+        with tab2:
+            display_analysis_dashboard()
+            
+            # Visualizations
+            st.header("📊 Medical Visualizations")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Laboratory Trends")
+                lab_chart = create_sample_lab_chart()
+                st.plotly_chart(lab_chart, use_container_width=True)
+            
+            with col2:
+                st.subheader("Vital Signs Monitor")
+                time_points = ['08:00', '12:00', '16:00', '20:00', '00:00']
+                heart_rate = [72, 75, 80, 78, 70]
+                blood_pressure_sys = [120, 118, 122, 119, 121]
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=time_points, y=heart_rate, mode='lines+markers', name='Heart Rate'))
+                fig.add_trace(go.Scatter(x=time_points, y=blood_pressure_sys, mode='lines+markers', name='BP Systolic'))
+                
+                fig.update_layout(title='Vital Signs Monitoring')
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with tab3:
+            st.header("📋 Medical Report")
+            
+            if st.session_state.analysis_results:
+                report_content = f"""
+    # Medical Analysis Report
+
+    **Patient:** {patient_name}  
+    **Date:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}
+
+    ## Laboratory Analysis
+    {st.session_state.analysis_results.get('lab_analysis', 'N/A')}
+
+    ## Imaging Analysis  
+    {st.session_state.analysis_results.get('image_analysis', 'N/A')}
+
+    ## Patient Summary
+    {st.session_state.analysis_results.get('patient_summary', 'N/A')}
+
+    ---
+    *Generated by MediAI - AI Medical Assistant*
+    """
+                
+                st.markdown(report_content)
+                
+                # Download button
+                st.download_button(
+                    label="📥 Download Report",
+                    data=report_content,
+                    file_name=f"medical_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.md",
+                    mime="text/markdown"
+                )
+            else:
+                st.info("Generate analysis first to view the report")
+    
+    except Exception as e:
+        st.error(f"Application error: {str(e)}")
+        st.info("Please check the logs for more details.")
 
 if __name__ == "__main__":
     main()
