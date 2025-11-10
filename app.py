@@ -39,7 +39,7 @@ class MedicalChatbot:
     def __init__(self, api_key=None):
         if api_key:
             try:
-                openai.api_key = api_key
+                self.client = openai.OpenAI(api_key=api_key)
                 self.api_key = api_key
                 self.client_configured = True
                 st.sidebar.success("✅ OpenAI client configured successfully!")
@@ -94,7 +94,7 @@ class MedicalChatbot:
             Format this professionally for medical practitioners.
             """
             
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a senior medical consultant with 20 years experience. Provide evidence-based, accurate medical analysis. Always emphasize patient safety and recommend specialist consultation when needed."},
@@ -114,7 +114,6 @@ class MedicalChatbot:
             return "Please configure API key first"
         
         try:
-            # For image analysis, we'll use the description since we can't directly analyze images with this API
             prompt = f"""
             Analyze this medical image based on the following description and findings:
             
@@ -131,7 +130,7 @@ class MedicalChatbot:
             Provide this in standard radiology report format.
             """
             
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a board-certified radiologist. Provide detailed, professional image analysis following standard radiology reporting protocols."},
@@ -165,7 +164,7 @@ class MedicalChatbot:
             6. **Follow-up Schedule**: Recommended monitoring timeline
             """
             
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a medical specialist analyzing clinical reports. Provide thorough, actionable insights for clinical decision making."},
@@ -213,13 +212,9 @@ class MedicalChatbot:
             - Key points for patient discussion
             - Warning signs to watch for
             - Self-management strategies
-            
-            **PROGNOSIS & OUTCOMES**
-            - Expected clinical course
-            - Long-term management goals
             """
             
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are an experienced physician creating comprehensive patient care plans. Focus on practical, actionable recommendations."},
@@ -239,7 +234,7 @@ class MedicalChatbot:
             return "Please configure API key first to use the chat feature."
         
         try:
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": """You are Dr. MedAI, an AI medical assistant for healthcare professionals. 
@@ -265,7 +260,7 @@ class MedicalChatbot:
                     - Highlight urgent findings that need immediate attention
                     - Suggest appropriate specialist consultations
                     """}
-                ] + messages,
+                ] + [{"role": m["role"], "content": m["content"]} for m in messages],
                 temperature=0.3,
                 max_tokens=1500
             )
@@ -391,17 +386,6 @@ def create_medical_visualizations():
             yaxis_title='Value'
         )
         st.plotly_chart(fig, use_container_width=True)
-    
-    # Risk Assessment Chart
-    st.subheader("📊 Health Risk Assessment")
-    risks = ['Cardiovascular', 'Metabolic', 'Renal', 'Hepatic', 'Respiratory']
-    scores = [65, 45, 30, 25, 20]
-    
-    fig = px.bar(x=scores, y=risks, orientation='h', 
-                 title='Patient Risk Profile Assessment',
-                 color=scores, color_continuous_scale='RdYlGn_r')
-    fig.update_layout(xaxis_title='Risk Score (%)', yaxis_title='Domain')
-    st.plotly_chart(fig, use_container_width=True)
 
 def main():
     try:
@@ -415,7 +399,7 @@ def main():
             st.warning("""
             🔑 **API Configuration Required**
             
-            To use MediAI, you need to configure your OpenAI API key in the sidebar.
+            To use MediAI, you need to configure your OpenAI API key in Streamlit secrets.
             
             Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
             """)
@@ -542,15 +526,8 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
                     st.session_state.messages = []
                     st.session_state.uploaded_files = []
                     st.rerun()
-            
-            # Quick Actions
-            st.header("⚡ Quick Actions")
-            if st.button("📋 Generate Quick Summary", use_container_width=True):
-                with st.spinner("Generating summary..."):
-                    patient_info = f"ID: {patient_id}, Name: {patient_name}, Age: {patient_age}, Gender: {patient_gender}"
-                    st.info("Use 'Analyze All Data' for comprehensive analysis")
 
-        # MAIN CONTENT AREA
+        # MAIN CONTENT AREA - CHAT MUST BE AT ROOT LEVEL
         st.header("💬 Dr. MedAI - Medical Chat Assistant")
         st.markdown("Chat with your AI medical assistant for clinical decision support")
         
@@ -559,7 +536,7 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
         
-        # Chat input - AT ROOT LEVEL
+        # Chat input - AT ROOT LEVEL (not inside any container)
         if prompt := st.chat_input("Ask about patient analysis, differential diagnosis, or medical queries..."):
             # Add user message to chat history
             st.session_state.messages.append({"role": "user", "content": prompt})
@@ -577,7 +554,7 @@ Lipid Panel: Total Cholesterol 185 (<200), LDL 110 (<100), HDL 45 (>40), Triglyc
                     # Add AI response to chat history
                     st.session_state.messages.append({"role": "assistant", "content": ai_response})
 
-        # Tabs for other features
+        # Tabs for other features (without chat input inside)
         tab1, tab2, tab3 = st.tabs(["📊 Analysis Dashboard", "📈 Visual Analytics", "📋 Medical Report"])
         
         with tab1:
