@@ -149,6 +149,15 @@ class MedicalAIAnalyzer:
     def __init__(self, api_key=None):
         self.api_key = api_key
         self.medical_knowledge_base = self._initialize_medical_knowledge()
+        # Available Groq models - updated to current models
+        self.available_models = [
+            "llama-3.1-8b-instant",
+            "llama-3.2-1b-preview", 
+            "llama-3.2-3b-preview",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it"
+        ]
+        self.current_model = "llama-3.1-8b-instant"  # Default model
     
     def _initialize_medical_knowledge(self):
         """Initialize comprehensive medical knowledge base"""
@@ -182,10 +191,13 @@ class MedicalAIAnalyzer:
             }
         }
 
-    def call_groq_api(self, messages, model="llama3-8b-8192", max_tokens=1500, temperature=0.7):
-        """Make direct API call to Groq"""
+    def call_groq_api(self, messages, model=None, max_tokens=1500, temperature=0.7):
+        """Make direct API call to Groq with current model"""
         if not self.api_key:
             return None
+        
+        # Use provided model or default
+        model_to_use = model or self.current_model
         
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -194,7 +206,7 @@ class MedicalAIAnalyzer:
         }
         data = {
             "messages": messages,
-            "model": model,
+            "model": model_to_use,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "top_p": 0.9,
@@ -208,10 +220,44 @@ class MedicalAIAnalyzer:
                 return result["choices"][0]["message"]["content"]
             else:
                 logger.error(f"Groq API error: {response.status_code} - {response.text}")
+                # Try fallback model if first attempt fails
+                if model_to_use != "llama-3.1-8b-instant":
+                    return self._try_fallback_model(messages, max_tokens, temperature)
                 return None
         except Exception as e:
             logger.error(f"Groq API call failed: {str(e)}")
             return None
+
+    def _try_fallback_model(self, messages, max_tokens, temperature):
+        """Try alternative models if primary fails"""
+        fallback_models = ["llama-3.2-3b-preview", "mixtral-8x7b-32768", "gemma2-9b-it"]
+        
+        for model in fallback_models:
+            try:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "messages": messages,
+                    "model": model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": 0.9,
+                    "stream": False
+                }
+                
+                response = requests.post(url, headers=headers, json=data, timeout=30)
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(f"Successfully used fallback model: {model}")
+                    return result["choices"][0]["message"]["content"]
+            except Exception as e:
+                logger.error(f"Fallback model {model} failed: {str(e)}")
+                continue
+        
+        return None
 
     def extract_text_from_pdf(self, pdf_file):
         """Extract text from uploaded PDF file"""
@@ -291,7 +337,7 @@ IMPORTANT: Never provide definitive diagnoses. Always emphasize consulting healt
             ]
 
             # Get response from Groq API
-            response = self.call_groq_api(messages, model="llama3-8b-8192", temperature=0.7, max_tokens=2000)
+            response = self.call_groq_api(messages, max_tokens=2000, temperature=0.7)
             
             if response:
                 return response
