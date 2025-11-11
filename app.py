@@ -142,6 +142,8 @@ if 'api_key' not in st.session_state:
     st.session_state.api_key = None
 if 'patient_context' not in st.session_state:
     st.session_state.patient_context = ""
+if 'processed_lab_data' not in st.session_state:
+    st.session_state.processed_lab_data = ""
 
 class MedicalAIAnalyzer:
     def __init__(self, api_key=None):
@@ -211,35 +213,77 @@ class MedicalAIAnalyzer:
             logger.error(f"Groq API call failed: {str(e)}")
             return None
 
-    def chat_with_medical_ai(self, message, patient_context=""):
+    def extract_text_from_pdf(self, pdf_file):
+        """Extract text from uploaded PDF file"""
+        try:
+            with pdfplumber.open(pdf_file) as pdf:
+                text = ""
+                for page in pdf.pages:
+                    text += page.extract_text() or ""
+            return text
+        except Exception as e:
+            logger.error(f"PDF extraction failed: {str(e)}")
+            return f"Error reading PDF: {str(e)}"
+
+    def extract_text_from_docx(self, docx_file):
+        """Extract text from uploaded DOCX file"""
+        try:
+            doc = docx.Document(docx_file)
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            return text
+        except Exception as e:
+            logger.error(f"DOCX extraction failed: {str(e)}")
+            return f"Error reading DOCX: {str(e)}"
+
+    def process_uploaded_files(self, uploaded_files):
+        """Process all uploaded files and extract text"""
+        all_text = ""
+        for uploaded_file in uploaded_files:
+            if uploaded_file.type == "application/pdf":
+                text = self.extract_text_from_pdf(uploaded_file)
+                all_text += f"\n--- PDF Content from {uploaded_file.name} ---\n{text}\n"
+            elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                text = self.extract_text_from_docx(uploaded_file)
+                all_text += f"\n--- DOCX Content from {uploaded_file.name} ---\n{text}\n"
+            elif uploaded_file.type == "text/plain":
+                text = str(uploaded_file.read(), "utf-8")
+                all_text += f"\n--- TXT Content from {uploaded_file.name} ---\n{text}\n"
+        return all_text
+
+    def chat_with_medical_ai(self, message, patient_context="", processed_data=""):
         """Advanced medical chat using Groq API with intelligent patient context"""
         if not self.api_key:
-            return self._intelligent_fallback_response(message, patient_context)
+            return self._intelligent_fallback_response(message, patient_context, processed_data)
         
         try:
             # Build intelligent system prompt
-            system_prompt = f"""You are Dr. MedAI, an advanced AI medical assistant. You have access to the following patient information:
+            system_prompt = f"""You are Dr. MedAI, an advanced AI medical assistant with deep medical knowledge. Analyze the patient information and provide specific, actionable medical guidance.
 
 PATIENT CONTEXT:
 {patient_context if patient_context else 'No specific patient information provided yet.'}
 
-IMPORTANT INSTRUCTIONS:
-1. FIRST analyze the patient context above to understand their medical situation
-2. If patient has provided lab results, symptoms, or medical history, focus your response on analyzing that specific information
-3. Provide personalized medical guidance based on their actual data
-4. For general greetings like "hi", respond naturally and ask about their health concerns or offer to analyze their medical data
-5. Always be conversational, empathetic, and professional
-6. When analyzing medical data, provide specific insights about what the values mean
-7. Suggest appropriate next steps based on the analysis
-8. Always recommend consulting healthcare providers for definitive medical advice
+PROCESSED MEDICAL DATA:
+{processed_data if processed_data else 'No additional medical data processed.'}
 
-RESPONSE GUIDELINES:
-- Be natural and conversational
-- Show you've understood their medical context
-- Provide specific, actionable insights
-- Ask clarifying questions when needed
-- Never provide definitive diagnoses
-- Always emphasize professional medical consultation"""
+CRITICAL INSTRUCTIONS:
+1. BE SPECIFIC AND ACTIONABLE - Provide concrete recommendations based on the data
+2. ANALYZE ALL AVAILABLE DATA - Use lab results, symptoms, and medical history
+3. PROVIDE EVIDENCE-BASED ADVICE - Reference medical guidelines when possible
+4. BE CONVERSATIONAL AND EMPATHETIC - Talk like a caring doctor
+5. IDENTIFY URGENT CONCERNS - Flag any critical findings immediately
+6. SUGGEST NEXT STEPS - Recommend specific tests, specialists, or treatments
+7. EDUCATE THE PATIENT - Explain medical terms and conditions clearly
+8. ALWAYS RECOMMEND FOLLOW-UP - Emphasize professional medical consultation
+
+RESPONSE STYLE:
+- Be natural, conversational, and warm
+- Show genuine concern for patient wellbeing
+- Use bullet points for clarity when needed
+- Provide specific numbers and ranges when discussing lab results
+- Explain what abnormal values mean in practical terms
+- Suggest dietary, lifestyle, and medical interventions
+
+IMPORTANT: Never provide definitive diagnoses. Always emphasize consulting healthcare providers."""
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -247,188 +291,322 @@ RESPONSE GUIDELINES:
             ]
 
             # Get response from Groq API
-            response = self.call_groq_api(messages, model="llama3-8b-8192", temperature=0.7)
+            response = self.call_groq_api(messages, model="llama3-8b-8192", temperature=0.7, max_tokens=2000)
             
             if response:
                 return response
             else:
-                return self._intelligent_fallback_response(message, patient_context)
+                return self._intelligent_fallback_response(message, patient_context, processed_data)
 
         except Exception as e:
             logger.error(f"Medical AI error: {str(e)}")
-            return self._intelligent_fallback_response(message, patient_context)
+            return self._intelligent_fallback_response(message, patient_context, processed_data)
 
-    def _intelligent_fallback_response(self, message, patient_context):
+    def _intelligent_fallback_response(self, message, patient_context, processed_data):
         """Provide intelligent fallback responses based on patient context"""
         message_lower = message.lower()
         
-        # Check if we have patient context
-        if patient_context and "iron" in patient_context.lower():
-            if any(greet in message_lower for greet in ['hi', 'hello', 'hey']):
-                return """👋 Hello! I can see you've mentioned iron deficiency in your medical context. 
-
-I'd be happy to help you understand:
-• What iron deficiency means for your health
-• Common symptoms and causes
-• Dietary recommendations for iron
-• When to follow up with your doctor
-
-What specific questions do you have about iron deficiency or your health concerns?"""
-            elif any(word in message_lower for word in ['iron', 'deficiency', 'anemia', 'ferritin']):
-                return """🔬 **Iron Deficiency Analysis**
-
-Based on your mention of iron deficiency, here's what you should know:
-
-**Understanding Iron Deficiency:**
-- Iron is essential for hemoglobin production
-- Deficiency can cause fatigue, weakness, and pale skin
-- Common in adolescents, women, and vegetarians
-
-**Key Laboratory Values to Monitor:**
-- **Hemoglobin**: Below 12 g/dL suggests anemia
-- **Ferritin**: Below 15 ng/mL indicates iron deficiency
-- **Iron levels**: Below 60 μg/dL
-- **TIBC**: Usually elevated in deficiency
-
-**Recommended Actions:**
-1. **Consult your doctor** for proper diagnosis
-2. **Consider iron supplements** if recommended
-3. **Iron-rich foods**: red meat, spinach, lentils, fortified cereals
-4. **Vitamin C** helps iron absorption
-5. **Follow-up testing** in 2-3 months
-
-**When to Seek Immediate Care:**
-- Severe fatigue preventing daily activities
-- Shortness of breath at rest
-- Chest pain or palpitations
-
-Would you like me to analyze specific lab values or discuss dietary recommendations?"""
+        # Check for specific medical conditions in context
+        has_iron_deficiency = "iron" in patient_context.lower() or "iron" in processed_data.lower()
+        has_lab_data = any(keyword in processed_data.lower() for keyword in ['hemoglobin', 'wbc', 'rbc', 'ferritin', 'glucose'])
         
-        # General greeting response
         if any(greet in message_lower for greet in ['hi', 'hello', 'hey']):
-            if patient_context:
-                return f"""👋 Hello! I can see we have some medical information about you. 
+            if has_iron_deficiency:
+                return """👋 Hello! I can see you've mentioned iron deficiency in your medical information. 
 
-I'm here to help you understand:
-• Your medical test results
-• Symptoms and health concerns
-• Medication questions
-• General health guidance
+I understand this can be concerning. Let me help you understand what this means and what steps you can take.
 
-What would you like to discuss about your health today?"""
+Based on iron deficiency, here's what I can help with:
+• Understanding your lab results and what they mean
+• Dietary recommendations to improve iron levels
+• Symptoms management and when to seek urgent care
+• Questions to ask your doctor
+
+What specific aspect would you like to discuss first?"""
             else:
                 return """👋 Hello! I'm Dr. MedAI, your medical assistant.
 
-I can help you with:
-• Analyzing medical test results
-• Understanding symptoms
-• Medication information
+I'm here to help you understand:
+• Your medical test results and what they mean
+• Symptoms and potential causes
+• Medication questions and interactions
 • Health and wellness guidance
 
-Please share your medical concerns or test results, and I'll provide helpful information and analysis.
+Please share your medical concerns, test results, or upload your medical reports, and I'll provide detailed, personalized analysis."""
 
-You can also enter your information in the sidebar to get personalized guidance!"""
-
-        # Symptom analysis
-        elif any(symptom in message_lower for symptom in ['tired', 'fatigue', 'weak', 'exhaust']):
-            return """😴 **Fatigue Analysis**
-
-Fatigue can have many causes. Let me help you understand:
-
-**Common Causes of Fatigue:**
-• **Iron deficiency anemia** - Very common, especially in your age group
-• **Sleep issues** - Quality and duration matter
-• **Nutritional deficiencies** - Iron, B12, Vitamin D
-• **Thyroid problems** - Affects energy metabolism
-• **Stress and mental health** - Significant impact on energy
-
-**Questions to Consider:**
-1. How long have you been feeling tired?
-2. Is it better or worse at certain times?
-3. Any other symptoms like dizziness or pale skin?
-4. Have you had recent blood tests?
-
-**Next Steps:**
-• Discuss these symptoms with your doctor
-• Consider complete blood count (CBC) testing
-• Review your sleep habits and diet
-• Monitor your energy patterns
-
-Would you like to discuss specific test results or other symptoms?"""
-
-        # General medical questions
+        elif any(word in message_lower for word in ['iron', 'deficiency', 'anemia', 'ferritin', 'hemoglobin']):
+            return self._provide_iron_deficiency_analysis(patient_context, processed_data)
+        
+        elif any(word in message_lower for word in ['symptom', 'tired', 'fatigue', 'weak', 'dizzy', 'pale']):
+            return self._analyze_symptoms(message_lower, patient_context, processed_data)
+        
+        elif any(word in message_lower for word in ['lab', 'test', 'result', 'report']):
+            return self._analyze_lab_results(processed_data)
+        
+        elif any(word in message_lower for word in ['diet', 'food', 'nutrition', 'eat']):
+            return self._provide_nutrition_advice(patient_context, processed_data)
+        
         else:
-            return """🏥 **Medical Guidance**
-
-I'd be happy to help with your health questions. To provide the most helpful information, please:
+            return """I'd be happy to help with your health questions! To provide the most accurate and helpful information, please:
 
 1. **Share your specific symptoms or concerns**
-2. **Tell me about any test results you have**
-3. **Describe your medical history if relevant**
+2. **Upload your medical reports or test results**
+3. **Tell me about any diagnoses you've received**
+4. **Describe your current medications or treatments**
 
-I can help you understand:
-• What your symptoms might mean
-• How to interpret test results
-• When to seek medical attention
-• General health recommendations
+The more information you provide, the better I can assist you with personalized guidance and explanations."""
 
-What specific health concern would you like to discuss?"""
+    def _provide_iron_deficiency_analysis(self, patient_context, processed_data):
+        """Provide detailed iron deficiency analysis"""
+        analysis = """🔬 **Comprehensive Iron Deficiency Analysis**
 
-    def analyze_patient_data(self, patient_info, medical_history, lab_data, image_description):
+**Understanding Your Condition:**
+Iron deficiency is one of the most common nutritional deficiencies worldwide. It occurs when your body doesn't have enough iron to produce adequate hemoglobin, the protein in red blood cells that carries oxygen.
+
+**Common Symptoms:**
+• Fatigue and weakness
+• Pale skin and conjunctiva
+• Shortness of breath
+• Dizziness or lightheadedness
+• Headaches
+• Cold hands and feet
+• Brittle nails
+• Unusual cravings for non-nutritive substances (pica)
+
+**Key Laboratory Findings:**
+"""
+        
+        # Extract and analyze lab values
+        lab_values = self.extract_lab_values(processed_data)
+        
+        critical_findings = []
+        if 'Hemoglobin' in lab_values:
+            hb = lab_values['Hemoglobin']
+            if hb < 12.0:
+                critical_findings.append(f"Hemoglobin: {hb} g/dL (LOW - indicates anemia)")
+            else:
+                analysis += f"• Hemoglobin: {hb} g/dL (Normal range: 12.0-16.0 g/dL)\n"
+        
+        if 'Ferritin' in lab_values:
+            ferritin = lab_values['Ferritin']
+            if ferritin < 15:
+                critical_findings.append(f"Ferritin: {ferritin} ng/mL (VERY LOW - confirms iron deficiency)")
+            elif ferritin < 30:
+                critical_findings.append(f"Ferritin: {ferritin} ng/mL (LOW - indicates iron deficiency)")
+            else:
+                analysis += f"• Ferritin: {ferritin} ng/mL (Normal range: 15-150 ng/mL)\n"
+        
+        if critical_findings:
+            analysis += "\n🚨 **CRITICAL FINDINGS:**\n" + "\n".join([f"• {finding}" for finding in critical_findings]) + "\n"
+        
+        analysis += """
+**Recommended Actions:**
+
+1. **Medical Consultation:** Schedule appointment with hematologist or primary care physician
+2. **Iron Supplementation:** Typically 65-200 mg elemental iron daily
+3. **Dietary Changes:** Increase iron-rich foods (red meat, spinach, lentils)
+4. **Vitamin C:** Take with iron supplements to enhance absorption
+5. **Follow-up Testing:** Repeat blood tests in 2-3 months
+6. **Identify Cause:** Investigate potential blood loss or absorption issues
+
+**When to Seek Immediate Care:**
+• Severe fatigue preventing daily activities
+• Chest pain or palpitations
+• Shortness of breath at rest
+• Significant dizziness or fainting
+
+Would you like me to analyze specific lab values or discuss dietary recommendations in more detail?"""
+        
+        return analysis
+
+    def _analyze_symptoms(self, message, patient_context, processed_data):
+        """Analyze patient symptoms"""
+        return """🤒 **Symptom Analysis**
+
+I understand you're experiencing symptoms. Let me help you understand what they might indicate:
+
+**Common Symptom Patterns:**
+
+**Fatigue + Weakness:**
+• Iron deficiency anemia (most common)
+• Thyroid disorders
+• Sleep apnea or poor sleep quality
+• Chronic fatigue syndrome
+• Nutritional deficiencies
+
+**Dizziness + Pale Skin:**
+• Anemia (reduced oxygen delivery)
+• Dehydration
+• Blood pressure issues
+• Inner ear problems
+
+**Next Steps:**
+1. **Track your symptoms** - note timing, triggers, severity
+2. **Get comprehensive blood work** - CBC, iron studies, thyroid panel
+3. **Discuss with your doctor** - bring your symptom diary
+4. **Consider lifestyle factors** - sleep, stress, diet, exercise
+
+**Red Flags Requiring Urgent Attention:**
+• Chest pain or pressure
+• Difficulty breathing
+• Fainting or near-fainting
+• Severe, persistent headache
+• Rapid heart rate
+
+Would you like to discuss specific symptoms in more detail or upload your test results for personalized analysis?"""
+
+    def _analyze_lab_results(self, processed_data):
+        """Analyze laboratory results"""
+        if not processed_data:
+            return "I don't see any lab results to analyze. Please upload your lab reports or paste your test results in the sidebar for detailed analysis."
+        
+        lab_values = self.extract_lab_values(processed_data)
+        
+        if not lab_values:
+            return "I found some medical data but couldn't extract specific lab values. Could you please paste your results in this format:\n\nHemoglobin: 12.5 g/dL\nFerritin: 25 ng/mL\nWBC: 6.8\n\nThis will help me provide more accurate analysis."
+        
+        analysis = "🔬 **Laboratory Results Analysis**\n\n"
+        
+        abnormal_count = 0
+        for test, value in lab_values.items():
+            if test in self.medical_knowledge_base['lab_ranges']:
+                ranges = self.medical_knowledge_base['lab_ranges'][test]
+                if value < ranges['low']:
+                    analysis += f"⚠️ **{test}**: {value} {ranges['unit']} **(LOW)** - Normal: {ranges['low']}-{ranges['high']} {ranges['unit']}\n"
+                    abnormal_count += 1
+                elif value > ranges['high']:
+                    analysis += f"⚠️ **{test}**: {value} {ranges['unit']} **(HIGH)** - Normal: {ranges['low']}-{ranges['high']} {ranges['unit']}\n"
+                    abnormal_count += 1
+                else:
+                    analysis += f"✅ **{test}**: {value} {ranges['unit']} (Normal)\n"
+        
+        if abnormal_count > 0:
+            analysis += f"\n**Found {abnormal_count} abnormal values** that should be discussed with your healthcare provider.\n"
+        else:
+            analysis += "\n**All analyzed values are within normal ranges.**\n"
+        
+        analysis += "\n**Recommendations:**\n• Discuss these results with your doctor\n• Consider follow-up testing if symptoms persist\n• Maintain records for future reference"
+        
+        return analysis
+
+    def _provide_nutrition_advice(self, patient_context, processed_data):
+        """Provide nutrition advice based on condition"""
+        if "iron" in patient_context.lower() or "iron" in processed_data.lower():
+            return """🍎 **Nutrition for Iron Deficiency**
+
+**Iron-Rich Foods to Include:**
+
+**Heme Iron (better absorption):**
+• Red meat (beef, lamb) - 3oz provides 2-3mg iron
+• Poultry (chicken, turkey)
+• Fish and seafood (especially oysters, clams)
+• Organ meats (liver) - very high in iron
+
+**Non-Heme Iron:**
+• Spinach and leafy greens (cooked)
+• Lentils and beans
+• Fortified cereals and grains
+• Tofu and soy products
+• Pumpkin seeds
+
+**Enhance Iron Absorption:**
+• **Vitamin C**: Citrus fruits, bell peppers, broccoli, strawberries
+• **Avoid with meals**: Tea, coffee, calcium supplements (wait 1-2 hours)
+• **Cook in cast iron**: Can increase iron content of food
+
+**Sample Iron-Rich Day:**
+• Breakfast: Fortified cereal with strawberries
+• Lunch: Spinach salad with lean beef and bell peppers
+• Dinner: Lentil soup with orange slices
+• Snack: Pumpkin seeds
+
+**Daily Iron Goals:**
+• Men: 8mg • Women (19-50): 18mg • Women (51+): 8mg"""
+        
+        return """🍎 **General Nutrition for Good Health**
+
+**Balanced Diet Principles:**
+• Fill half your plate with vegetables and fruits
+• Include lean protein with each meal
+• Choose whole grains over refined grains
+• Stay hydrated with water
+• Limit processed foods and added sugars
+
+**Key Nutrients for Energy:**
+• Iron: Meat, spinach, lentils
+• B12: Animal products, fortified foods
+• Vitamin D: Sunlight, fatty fish, fortified dairy
+• Magnesium: Nuts, seeds, leafy greens"""
+
+    def analyze_patient_data(self, patient_info, medical_history, lab_data, image_description, processed_files_text=""):
         """Comprehensive analysis of all patient data"""
         if not self.api_key:
-            return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description)
+            return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description, processed_files_text)
         
         try:
+            # Combine all data
+            combined_data = f"""
+PATIENT INFORMATION:
+{patient_info}
+
+MEDICAL HISTORY:
+{medical_history}
+
+LABORATORY DATA:
+{lab_data}
+
+ADDITIONAL MEDICAL DATA:
+{processed_files_text}
+
+IMAGING/CLINICAL NOTES:
+{image_description}
+"""
+
             prompt = f"""
-            Perform a comprehensive medical analysis of this patient case:
+            Perform a comprehensive medical analysis of this patient case. Provide specific, actionable insights.
 
-            PATIENT INFORMATION:
-            {patient_info}
+            PATIENT DATA:
+            {combined_data}
 
-            MEDICAL HISTORY:
-            {medical_history}
+            Please provide a detailed analysis with these sections:
 
-            LABORATORY DATA:
-            {lab_data}
-
-            IMAGING FINDINGS:
-            {image_description}
-
-            Please provide a detailed analysis including:
-
-            **PATIENT OVERVIEW**: Summary of the clinical case
-            **KEY FINDINGS**: Important abnormalities or notable results
-            **RISK ASSESSMENT**: Potential health risks based on data
+            **CLINICAL SUMMARY**: Brief overview of the patient case
+            **KEY FINDINGS**: Specific abnormalities and notable results with interpretation
+            **RISK ASSESSMENT**: Health risks based on available data
             **CLINICAL CORRELATION**: How findings relate to patient presentation
-            **RECOMMENDATIONS**: Clear next steps for evaluation and management
-            **URGENCY LEVEL**: Assessment of how quickly action is needed
+            **ACTIONABLE RECOMMENDATIONS**: Clear next steps including:
+               - Specific tests needed
+               - Specialist consultations to consider
+               - Lifestyle modifications
+               - Medication considerations
+            **URGENCY LEVEL**: How quickly action is needed (Low/Medium/High/Critical)
+            **PATIENT EDUCATION**: What the patient needs to understand about their condition
 
-            Format as a professional medical consultation note.
+            Be specific, practical, and evidence-based. Use numbers and reference ranges when discussing lab results.
             """
 
             messages = [
                 {
                     "role": "system", 
-                    "content": "You are an experienced physician analyzing comprehensive patient data. Provide thorough, evidence-based analysis with clear clinical recommendations. Focus on actionable insights and patient safety."
+                    "content": "You are an experienced physician analyzing comprehensive patient data. Provide thorough, evidence-based analysis with clear clinical recommendations. Focus on actionable insights and patient safety. Be specific and practical."
                 },
                 {"role": "user", "content": prompt}
             ]
 
-            response = self.call_groq_api(messages, max_tokens=2000, temperature=0.3)
+            response = self.call_groq_api(messages, max_tokens=2500, temperature=0.3)
             
             if response:
                 return response
             else:
-                return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description)
+                return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description, processed_files_text)
                 
         except Exception as e:
             logger.error(f"Comprehensive analysis failed: {str(e)}")
-            return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description)
+            return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description, processed_files_text)
 
-    def _basic_patient_analysis(self, patient_info, medical_history, lab_data, image_description):
+    def _basic_patient_analysis(self, patient_info, medical_history, lab_data, image_description, processed_files_text):
         """Basic analysis when AI is unavailable"""
-        analysis = "## 📊 Patient Data Analysis\n\n"
+        analysis = "## 📊 Comprehensive Patient Data Analysis\n\n"
         
         analysis += f"**Patient**: {patient_info}\n\n"
         
@@ -436,52 +614,63 @@ What specific health concern would you like to discuss?"""
             analysis += f"**Medical History**: {medical_history}\n\n"
         
         # Analyze lab data
-        if lab_data and lab_data.strip():
-            lab_values = self.extract_lab_values(lab_data)
-            if lab_values:
-                analysis += "### 🔬 Laboratory Findings\n"
-                for test, value in lab_values.items():
-                    if test in self.medical_knowledge_base['lab_ranges']:
-                        ranges = self.medical_knowledge_base['lab_ranges'][test]
-                        if value < ranges['low']:
-                            analysis += f"⚠️ **{test}**: {value} {ranges['unit']} **(LOW)** - Normal range: {ranges['low']}-{ranges['high']}\n"
-                        elif value > ranges['high']:
-                            analysis += f"⚠️ **{test}**: {value} {ranges['unit']} **(HIGH)** - Normal range: {ranges['low']}-{ranges['high']}\n"
-                        else:
-                            analysis += f"✅ **{test}**: {value} {ranges['unit']} (Normal)\n"
+        combined_lab_data = lab_data + "\n" + processed_files_text
+        lab_values = self.extract_lab_values(combined_lab_data)
+        
+        if lab_values:
+            analysis += "### 🔬 Laboratory Findings\n"
+            abnormal_count = 0
+            for test, value in lab_values.items():
+                if test in self.medical_knowledge_base['lab_ranges']:
+                    ranges = self.medical_knowledge_base['lab_ranges'][test]
+                    if value < ranges['low']:
+                        analysis += f"⚠️ **{test}**: {value} {ranges['unit']} **(LOW)** - Normal range: {ranges['low']}-{ranges['high']} {ranges['unit']}\n"
+                        abnormal_count += 1
+                    elif value > ranges['high']:
+                        analysis += f"⚠️ **{test}**: {value} {ranges['unit']} **(HIGH)** - Normal range: {ranges['low']}-{ranges['high']} {ranges['unit']}\n"
+                        abnormal_count += 1
+                    else:
+                        analysis += f"✅ **{test}**: {value} {ranges['unit']} (Normal)\n"
+            
+            if abnormal_count > 0:
+                analysis += f"\n**Found {abnormal_count} abnormal values requiring medical attention.**\n"
+        
+        if processed_files_text:
+            analysis += f"\n### 📁 Processed Medical Documents\nMedical documents have been processed and included in analysis.\n"
         
         if image_description and image_description.strip():
-            analysis += f"\n### 🖼️ Imaging Notes\n{image_description}\n"
+            analysis += f"\n### 🖼️ Clinical Notes\n{image_description}\n"
         
-        analysis += "\n### 💡 Recommendations\n"
-        analysis += "1. **Review findings** with your healthcare provider\n"
-        analysis += "2. **Discuss any abnormal values** for proper interpretation\n"
-        analysis += "3. **Follow up** as recommended based on clinical context\n"
-        analysis += "4. **Maintain records** for future reference\n"
+        analysis += "\n### 💡 Recommended Next Steps\n"
+        analysis += "1. **Review all findings** with your healthcare provider\n"
+        analysis += "2. **Discuss abnormal values** for proper clinical interpretation\n"
+        analysis += "3. **Consider specialist referral** if indicated by findings\n"
+        analysis += "4. **Schedule follow-up testing** as needed\n"
+        analysis += "5. **Implement lifestyle changes** based on medical advice\n"
         
         return analysis
 
     def extract_lab_values(self, text):
-        """Extract laboratory values from text"""
+        """Extract laboratory values from text with improved pattern matching"""
         patterns = {
-            'WBC': r'WBC\s*[:]?\s*([\d.]+)',
-            'RBC': r'RBC\s*[:]?\s*([\d.]+)',
-            'Hemoglobin': r'Hemoglobin\s*[:]?\s*([\d.]+)|Hgb\s*[:]?\s*([\d.]+)|Hb\s*[:]?\s*([\d.]+)',
-            'Hematocrit': r'Hematocrit\s*[:]?\s*([\d.]+)|Hct\s*[:]?\s*([\d.]+)',
-            'Platelets': r'Platelets\s*[:]?\s*([\d.]+)',
-            'Glucose': r'Glucose\s*[:]?\s*([\d.]+)',
-            'Creatinine': r'Creatinine\s*[:]?\s*([\d.]+)',
-            'BUN': r'BUN\s*[:]?\s*([\d.]+)',
-            'ALT': r'ALT\s*[:]?\s*([\d.]+)',
-            'AST': r'AST\s*[:]?\s*([\d.]+)',
-            'Total Cholesterol': r'Total Cholesterol\s*[:]?\s*([\d.]+)|Cholesterol\s*[:]?\s*([\d.]+)',
-            'LDL': r'LDL\s*[:]?\s*([\d.]+)',
-            'HDL': r'HDL\s*[:]?\s*([\d.]+)',
-            'Triglycerides': r'Triglycerides\s*[:]?\s*([\d.]+)',
-            'Iron': r'Iron\s*[:]?\s*([\d.]+)',
-            'Ferritin': r'Ferritin\s*[:]?\s*([\d.]+)',
-            'TIBC': r'TIBC\s*[:]?\s*([\d.]+)',
-            'Transferrin Saturation': r'Transferrin Saturation\s*[:]?\s*([\d.]+)|Sat\s*[:]?\s*([\d.]+)'
+            'WBC': r'WBC[\s:\-]*([\d.]+)',
+            'RBC': r'RBC[\s:\-]*([\d.]+)',
+            'Hemoglobin': r'Hemoglobin[\s:\-]*([\d.]+)|Hgb[\s:\-]*([\d.]+)|Hb[\s:\-]*([\d.]+)',
+            'Hematocrit': r'Hematocrit[\s:\-]*([\d.]+)|Hct[\s:\-]*([\d.]+)',
+            'Platelets': r'Platelets[\s:\-]*([\d.]+)',
+            'Glucose': r'Glucose[\s:\-]*([\d.]+)',
+            'Creatinine': r'Creatinine[\s:\-]*([\d.]+)',
+            'BUN': r'BUN[\s:\-]*([\d.]+)',
+            'ALT': r'ALT[\s:\-]*([\d.]+)',
+            'AST': r'AST[\s:\-]*([\d.]+)',
+            'Total Cholesterol': r'Total Cholesterol[\s:\-]*([\d.]+)|Cholesterol[\s:\-]*([\d.]+)',
+            'LDL': r'LDL[\s:\-]*([\d.]+)',
+            'HDL': r'HDL[\s:\-]*([\d.]+)',
+            'Triglycerides': r'Triglycerides[\s:\-]*([\d.]+)',
+            'Iron': r'Iron[\s:\-]*([\d.]+)',
+            'Ferritin': r'Ferritin[\s:\-]*([\d.]+)',
+            'TIBC': r'TIBC[\s:\-]*([\d.]+)',
+            'Transferrin Saturation': r'Transferrin Saturation[\s:\-]*([\d.]+)|Sat[\s:\-]*([\d.]+)'
         }
         
         extracted_values = {}
@@ -490,7 +679,7 @@ What specific health concern would you like to discuss?"""
             for match in matches:
                 # Find the first non-empty match in the tuple
                 for value in match:
-                    if value:
+                    if value and value.strip():
                         try:
                             extracted_values[test] = float(value)
                             break
@@ -569,16 +758,16 @@ def setup_sidebar():
         col1, col2 = st.columns(2)
         with col1:
             patient_id = st.text_input("Patient ID", value="PT-001", key="patient_id")
-            patient_age = st.number_input("Age", min_value=0, max_value=120, value=17, key="patient_age")
+            patient_age = st.number_input("Age", min_value=0, max_value=120, value=45, key="patient_age")
         with col2:
-            patient_name = st.text_input("Patient Name", value="awais", key="patient_name")
+            patient_name = st.text_input("Patient Name", value="John Doe", key="patient_name")
             patient_gender = st.selectbox("Gender", ["Male", "Female", "Other"], key="patient_gender")
         
         st.header("📋 Medical History")
         medical_history = st.text_area(
             "Medical History & Symptoms", 
             height=100,
-            placeholder="Example: Iron deficiency, fatigue, frequent headaches...",
+            placeholder="Example: Iron deficiency, fatigue, frequent headaches, pale skin...",
             key="medical_history"
         )
         
@@ -589,26 +778,42 @@ def setup_sidebar():
         with tab1:
             st.subheader("Laboratory Results")
             lab_files = st.file_uploader("Upload Lab Reports", 
-                                       type=['pdf', 'docx', 'txt', 'jpg', 'png'], 
+                                       type=['pdf', 'docx', 'txt'], 
                                        key="lab_uploader",
-                                       accept_multiple_files=True)
-            lab_text_input = st.text_area("Paste Lab Results:", height=120,
+                                       accept_multiple_files=True,
+                                       help="Upload PDF, DOCX, or TXT files containing lab results")
+            
+            if lab_files:
+                st.info(f"📎 {len(lab_files)} file(s) uploaded")
+                for file in lab_files:
+                    st.write(f"• {file.name} ({file.size//1024} KB)")
+            
+            lab_text_input = st.text_area("Or Paste Lab Results:", height=120,
                                         placeholder="""Example:
 Hemoglobin: 11.2 g/dL (Low)
 Ferritin: 12 ng/mL (Low)
 Iron: 45 μg/dL (Low)
-WBC: 6.8
-Platelets: 245""",
+WBC: 6.8 10^3/μL
+Platelets: 245 10^3/μL
+Glucose: 95 mg/dL""",
                                         key="lab_text")
         
         with tab2:
             st.subheader("Medical Notes & Symptoms")
-            image_description = st.text_area("Medical Notes & Findings:", height=120,
+            image_description = st.text_area("Clinical Notes & Findings:", height=120,
                                            placeholder="""Example:
-Patient reports fatigue and pale skin.
+Patient reports persistent fatigue and pale skin.
 Diagnosed with iron deficiency anemia.
-Recommended iron supplements and dietary changes.""",
+Recommended iron supplements and dietary changes.
+Follow-up in 3 months.""",
                                            key="image_desc")
+        
+        # Process uploaded files
+        processed_files_text = ""
+        if lab_files:
+            analyzer = MedicalAIAnalyzer(st.session_state.api_key)
+            processed_files_text = analyzer.process_uploaded_files(lab_files)
+            st.session_state.processed_lab_data = processed_files_text
         
         # Build patient context
         patient_context = f"""
@@ -616,6 +821,7 @@ Patient: {patient_name}, {patient_age} years, {patient_gender}
 Medical History: {medical_history if medical_history else 'Not specified'}
 Laboratory Data: {lab_text_input if lab_text_input else 'Not provided'}
 Medical Notes: {image_description if image_description else 'Not provided'}
+Uploaded Files: {'Yes' if lab_files else 'No'}
         """.strip()
         
         st.session_state.patient_context = patient_context
@@ -633,6 +839,7 @@ Medical Notes: {image_description if image_description else 'Not provided'}
                 st.session_state.analysis_results = {}
                 st.session_state.messages = []
                 st.session_state.analyze_clicked = False
+                st.session_state.processed_lab_data = ""
                 st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
         
@@ -641,7 +848,8 @@ Medical Notes: {image_description if image_description else 'Not provided'}
             'medical_history': medical_history,
             'lab_data': lab_text_input,
             'image_description': image_description,
-            'patient_context': patient_context
+            'patient_context': patient_context,
+            'processed_files_text': processed_files_text
         }
 
 def display_medical_chat(analyzer):
@@ -658,6 +866,11 @@ def display_medical_chat(analyzer):
     if st.session_state.patient_context:
         with st.expander("📋 Current Patient Context", expanded=False):
             st.text(st.session_state.patient_context)
+    
+    # Processed data summary
+    if st.session_state.processed_lab_data:
+        with st.expander("📊 Processed Medical Data", expanded=False):
+            st.text(st.session_state.processed_lab_data[:500] + "..." if len(st.session_state.processed_lab_data) > 500 else st.session_state.processed_lab_data)
     
     # Chat container
     st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
@@ -689,7 +902,7 @@ def display_medical_chat(analyzer):
     
     # Quick action buttons
     st.subheader("💡 Quick Medical Questions")
-    quick_col1, quick_col2 = st.columns(2)
+    quick_col1, quick_col2, quick_col3 = st.columns(3)
     
     with quick_col1:
         if st.button("🤒 Discuss Symptoms", use_container_width=True):
@@ -700,8 +913,14 @@ def display_medical_chat(analyzer):
     with quick_col2:
         if st.button("🔬 Analyze Test Results", use_container_width=True):
             process_user_message(analyzer, "Can you help me understand my medical test results?")
-        if st.button("🍎 Health Recommendations", use_container_width=True):
-            process_user_message(analyzer, "What lifestyle changes or dietary recommendations do you suggest for my condition?")
+        if st.button("🍎 Nutrition Advice", use_container_width=True):
+            process_user_message(analyzer, "What dietary recommendations do you suggest for my condition?")
+    
+    with quick_col3:
+        if st.button("📋 Next Steps", use_container_width=True):
+            process_user_message(analyzer, "What are the recommended next steps for my medical condition?")
+        if st.button("🩺 General Health", use_container_width=True):
+            process_user_message(analyzer, "What are evidence-based recommendations for maintaining good health?")
 
 def process_user_message(analyzer, user_input):
     """Process user message and generate AI response"""
@@ -712,7 +931,8 @@ def process_user_message(analyzer, user_input):
     with st.spinner("Dr. MedAI is analyzing your question..."):
         ai_response = analyzer.chat_with_medical_ai(
             user_input, 
-            st.session_state.patient_context
+            st.session_state.patient_context,
+            st.session_state.processed_lab_data
         )
         
         # Add AI response to chat history
@@ -720,7 +940,7 @@ def process_user_message(analyzer, user_input):
     
     st.rerun()
 
-def display_analysis_dashboard(analyzer):
+def display_analysis_dashboard(analyzer, patient_data):
     """Display professional medical dashboard"""
     st.header("📊 Medical Analysis Dashboard")
     
@@ -731,8 +951,9 @@ def display_analysis_dashboard(analyzer):
         To begin medical analysis:
         1. 👤 Enter patient information in the sidebar
         2. 📋 Add medical history, symptoms, or test results
-        3. 🚀 Click **'Analyze Patient Data'** for comprehensive analysis
-        4. 💬 Use the chat for personalized medical conversations
+        3. 📁 Upload medical reports (PDF, DOCX, TXT)
+        4. 🚀 Click **'Analyze Patient Data'** for comprehensive analysis
+        5. 💬 Use the chat for personalized medical conversations
         
         *The more information you provide, the better I can assist you!*
         """)
@@ -748,62 +969,125 @@ def display_analysis_dashboard(analyzer):
         st.metric("AI Powered", "Yes" if st.session_state.api_configured else "Basic")
     
     with col3:
-        st.metric("Patient Data", "Loaded")
+        has_data = any([
+            patient_data['medical_history'], 
+            patient_data['lab_data'], 
+            patient_data['processed_files_text'],
+            patient_data['image_description']
+        ])
+        st.metric("Patient Data", "Loaded" if has_data else "Minimal")
     
     with col4:
-        st.metric("Report Status", "Ready")
+        lab_values = analyzer.extract_lab_values(patient_data['lab_data'] + patient_data['processed_files_text'])
+        abnormal_count = sum(1 for test, value in lab_values.items() 
+                           if test in analyzer.medical_knowledge_base['lab_ranges'] 
+                           and (value < analyzer.medical_knowledge_base['lab_ranges'][test]['low'] 
+                                or value > analyzer.medical_knowledge_base['lab_ranges'][test]['high']))
+        st.metric("Abnormal Values", abnormal_count if lab_values else "N/A")
     
     # Detailed Analysis Sections
     if 'comprehensive_analysis' in st.session_state.analysis_results:
         with st.expander("📋 **Comprehensive Patient Analysis**", expanded=True):
             st.markdown(st.session_state.analysis_results['comprehensive_analysis'])
 
-def create_advanced_visualizations():
+def create_advanced_visualizations(patient_data, analyzer):
     """Create professional medical visualizations"""
     st.header("📈 Health Analytics & Trends")
     
-    col1, col2 = st.columns(2)
+    # Extract lab values for visualization
+    combined_data = patient_data['lab_data'] + patient_data['processed_files_text']
+    lab_values = analyzer.extract_lab_values(combined_data)
     
-    with col1:
-        st.subheader("🩸 Common Blood Values")
-        lab_data = {
-            'Parameter': ['Hemoglobin', 'WBC', 'Platelets', 'Glucose', 'Iron'],
-            'Your Value': [11.2, 6.8, 245, 95, 45],
-            'Normal Low': [12.0, 4.0, 150, 70, 60],
-            'Normal High': [16.0, 11.0, 450, 100, 170]
-        }
+    if lab_values:
+        col1, col2 = st.columns(2)
         
-        df = pd.DataFrame(lab_data)
+        with col1:
+            st.subheader("🩸 Current Lab Values")
+            
+            # Prepare data for visualization
+            viz_data = []
+            for test, value in lab_values.items():
+                if test in analyzer.medical_knowledge_base['lab_ranges']:
+                    ranges = analyzer.medical_knowledge_base['lab_ranges'][test]
+                    status = "Normal"
+                    if value < ranges['low']:
+                        status = "Low"
+                    elif value > ranges['high']:
+                        status = "High"
+                    
+                    viz_data.append({
+                        'Parameter': test,
+                        'Value': value,
+                        'Lower Limit': ranges['low'],
+                        'Upper Limit': ranges['high'],
+                        'Status': status
+                    })
+            
+            if viz_data:
+                df = pd.DataFrame(viz_data)
+                
+                fig = go.Figure()
+                
+                # Add normal range
+                fig.add_trace(go.Scatter(
+                    x=df['Parameter'], 
+                    y=df['Upper Limit'],
+                    mode='lines',
+                    name='Upper Limit',
+                    line=dict(dash='dash', color='red')
+                ))
+                fig.add_trace(go.Scatter(
+                    x=df['Parameter'], 
+                    y=df['Lower Limit'],
+                    mode='lines',
+                    name='Lower Limit',
+                    line=dict(dash='dash', color='red'),
+                    fill='tonexty',
+                    fillcolor='rgba(255,0,0,0.1)'
+                ))
+                
+                # Add actual values with color coding
+                colors = []
+                for status in df['Status']:
+                    if status == "Low":
+                        colors.append('blue')
+                    elif status == "High":
+                        colors.append('red')
+                    else:
+                        colors.append('green')
+                
+                fig.add_trace(go.Bar(
+                    name='Your Values', 
+                    x=df['Parameter'], 
+                    y=df['Value'],
+                    marker_color=colors,
+                    text=df['Value'],
+                    textposition='auto'
+                ))
+                
+                fig.update_layout(
+                    title='Laboratory Values Overview',
+                    yaxis_title='Value',
+                    showlegend=True,
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
         
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['Parameter'], y=df['Normal High'], 
-                               mode='lines', name='Upper Limit', line=dict(dash='dash', color='red')))
-        fig.add_trace(go.Scatter(x=df['Parameter'], y=df['Normal Low'], 
-                               mode='lines', name='Lower Limit', line=dict(dash='dash', color='red')))
-        fig.add_trace(go.Bar(name='Your Values', x=df['Parameter'], y=df['Your Value'], 
-                           marker_color=['red', 'green', 'green', 'green', 'red']))
-        
-        fig.update_layout(
-            title='Laboratory Values Overview',
-            yaxis_title='Value',
-            showlegend=True,
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            st.subheader("📊 Status Summary")
+            
+            status_counts = df['Status'].value_counts()
+            fig_pie = px.pie(
+                values=status_counts.values,
+                names=status_counts.index,
+                title='Lab Value Status Distribution',
+                color=status_counts.index,
+                color_discrete_map={'Normal': 'green', 'Low': 'blue', 'High': 'red'}
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
     
-    with col2:
-        st.subheader("📊 Iron Deficiency Impact")
-        categories = ['Energy Levels', 'Cognitive Function', 'Physical Performance', 'Immune Function']
-        impact_scores = [85, 60, 75, 65]
-        
-        fig = go.Figure(data=[go.Bar(x=categories, y=impact_scores, 
-                                   marker_color=['red', 'orange', 'orange', 'yellow'])])
-        fig.update_layout(
-            title='Common Effects of Iron Deficiency',
-            yaxis_title='Impact Score (%)',
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Upload lab reports or enter lab values in the sidebar to see visualizations.")
 
 def main():
     # Professional Header
@@ -829,13 +1113,15 @@ def main():
                 patient_data['patient_info'], 
                 patient_data['medical_history'],
                 patient_data['lab_data'],
-                patient_data['image_description']
+                patient_data['image_description'],
+                patient_data['processed_files_text']
             )
             
             st.session_state.analysis_results = analysis_results
             st.session_state.analyze_clicked = False
             
         st.success("✅ Comprehensive medical analysis completed!")
+        st.rerun()
     
     # Main content tabs
     tab1, tab2, tab3, tab4 = st.tabs(["💬 Medical Chat", "📊 Analysis", "📈 Health Insights", "📋 Report"])
@@ -844,44 +1130,48 @@ def main():
         display_medical_chat(analyzer)
     
     with tab2:
-        display_analysis_dashboard(analyzer)
+        display_analysis_dashboard(analyzer, patient_data)
     
     with tab3:
-        create_advanced_visualizations()
+        create_advanced_visualizations(patient_data, analyzer)
     
     with tab4:
         st.header("📋 Medical Summary Report")
         if st.session_state.analysis_results:
             report_content = f"""
 # 🏥 MEDICAL ANALYSIS REPORT
+## Generated by MediAI Pro
 
-## Patient Information
+### Patient Information
 {patient_data['patient_info']}
 
-## Comprehensive Analysis
+### Comprehensive Analysis
 {st.session_state.analysis_results.get('comprehensive_analysis', 'No analysis available')}
 
-## Key Recommendations
+### Key Recommendations Summary
 
-### Immediate Actions
+#### Immediate Actions
 - Review all findings with your healthcare provider
 - Address any identified deficiencies or abnormalities
 - Implement recommended lifestyle modifications
+- Schedule necessary follow-up appointments
 
-### Follow-up Plan
-- Schedule appropriate medical follow-up
-- Monitor symptoms and progress
-- Repeat testing as clinically indicated
+#### Medical Follow-up
+- Specialist consultations as indicated
+- Repeat testing per clinical guidelines
+- Medication adjustments if needed
+- Ongoing symptom monitoring
 
-### Long-term Health Strategy
+#### Long-term Health Strategy
 - Focus on evidence-based preventive care
 - Maintain regular health monitoring
 - Continue management of chronic conditions
+- Adopt healthy lifestyle habits
 
 ---
-*Generated by MediAI Pro on {datetime.now().strftime('%B %d, %Y at %H:%M')}*
+*Report generated on {datetime.now().strftime('%B %d, %Y at %H:%M')}*
 
-**Medical Disclaimer**: This analysis provides educational information and should be reviewed by qualified healthcare professionals. Always seek professional medical advice for personal health concerns.
+**Medical Disclaimer**: This analysis provides educational information and should be reviewed by qualified healthcare professionals. Always seek professional medical advice for personal health concerns. This report does not constitute medical diagnosis or treatment recommendations.
 """
             st.markdown(report_content)
             
@@ -897,7 +1187,7 @@ def main():
                 )
             with col2:
                 st.download_button(
-                    label="📊 Export Analysis",
+                    label="📊 Export Analysis Data",
                     data=json.dumps(st.session_state.analysis_results, indent=2),
                     file_name=f"Analysis_{datetime.now().strftime('%Y%m%d')}.json",
                     mime="application/json",
