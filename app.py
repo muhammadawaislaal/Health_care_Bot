@@ -132,6 +132,22 @@ st.markdown("""
         border: 1px solid #ffeaa7;
         margin: 0.5rem 0;
     }
+    .emergency-alert {
+        background-color: #ffcccc;
+        color: #cc0000;
+        padding: 1rem;
+        border-radius: 10px;
+        border: 2px solid #ff6666;
+        margin: 1rem 0;
+        font-weight: bold;
+    }
+    .vital-signs {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -158,20 +174,28 @@ if 'rate_limit_warning' not in st.session_state:
     st.session_state.rate_limit_warning = False
 if 'last_api_call' not in st.session_state:
     st.session_state.last_api_call = 0
+if 'conversation_history' not in st.session_state:
+    st.session_state.conversation_history = []
+if 'medical_conditions' not in st.session_state:
+    st.session_state.medical_conditions = []
+if 'current_diagnosis' not in st.session_state:
+    st.session_state.current_diagnosis = ""
+if 'treatment_plan' not in st.session_state:
+    st.session_state.treatment_plan = ""
 
 class MedicalAIAnalyzer:
     def __init__(self, api_key=None):
         self.api_key = api_key
         self.medical_knowledge_base = self._initialize_medical_knowledge()
-        # Updated to current available Groq models
+        # Current available Groq models
         self.available_models = [
-            "llama-3.1-8b-instant",  # Primary model
-            "mixtral-8x7b-32768",    # Fallback 1
-            "gemma2-9b-it",          # Fallback 2
-            "llama3-70b-8192"        # Fallback 3 (if available)
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it"
         ]
-        self.current_model = "llama-3.1-8b-instant"  # Start with reliable model
-        self.rate_limit_delay = 3  # Increased delay between API calls
+        self.current_model = "llama-3.1-8b-instant"
+        self.rate_limit_delay = 2
+        self.conversation_context = []
     
     def _initialize_medical_knowledge(self):
         """Initialize comprehensive medical knowledge base"""
@@ -194,26 +218,63 @@ class MedicalAIAnalyzer:
                 'Iron': {'low': 60, 'high': 170, 'unit': 'μg/dL', 'critical_low': 40, 'critical_high': 200},
                 'Ferritin': {'low': 15, 'high': 150, 'unit': 'ng/mL', 'critical_low': 10, 'critical_high': 500},
                 'TIBC': {'low': 250, 'high': 400, 'unit': 'μg/dL', 'critical_low': 200, 'critical_high': 500},
-                'Transferrin Saturation': {'low': 20, 'high': 50, 'unit': '%', 'critical_low': 15, 'critical_high': 60}
+                'Transferrin Saturation': {'low': 20, 'high': 50, 'unit': '%', 'critical_low': 15, 'critical_high': 60},
+                'TSH': {'low': 0.4, 'high': 4.0, 'unit': 'mIU/L', 'critical_low': 0.1, 'critical_high': 10.0},
+                'T3': {'low': 80, 'high': 200, 'unit': 'ng/dL', 'critical_low': 50, 'critical_high': 300},
+                'T4': {'low': 4.5, 'high': 12.0, 'unit': 'μg/dL', 'critical_low': 2.0, 'critical_high': 20.0},
+                'Vitamin B12': {'low': 200, 'high': 900, 'unit': 'pg/mL', 'critical_low': 150, 'critical_high': 1500},
+                'Vitamin D': {'low': 30, 'high': 100, 'unit': 'ng/mL', 'critical_low': 10, 'critical_high': 150}
             },
-            'symptoms_analysis': {
-                'fatigue': ['Iron deficiency', 'Anemia', 'Thyroid issues', 'Sleep disorders'],
-                'weakness': ['Electrolyte imbalance', 'Anemia', 'Chronic fatigue', 'Nutritional deficiencies'],
-                'pale_skin': ['Anemia', 'Iron deficiency', 'Circulation issues'],
-                'shortness_of_breath': ['Anemia', 'Cardiac issues', 'Respiratory conditions'],
-                'dizziness': ['Anemia', 'Dehydration', 'Blood pressure issues']
+            'symptoms_database': {
+                'fatigue': {
+                    'common_causes': ['Iron deficiency anemia', 'Thyroid disorders', 'Sleep apnea', 'Depression', 'Chronic fatigue syndrome'],
+                    'urgent_signs': ['Chest pain', 'Shortness of breath', 'Fainting', 'Severe weakness'],
+                    'tests': ['CBC', 'Iron studies', 'Thyroid panel', 'Vitamin B12', 'Vitamin D']
+                },
+                'headache': {
+                    'common_causes': ['Tension headache', 'Migraine', 'Sinusitis', 'Dehydration', 'Eye strain'],
+                    'urgent_signs': ['Sudden severe headache', 'Vision changes', 'Confusion', 'Fever with stiff neck'],
+                    'tests': ['Blood pressure', 'Neurological exam', 'CT scan if indicated']
+                },
+                'chest_pain': {
+                    'common_causes': ['Acid reflux', 'Anxiety', 'Muscle strain', 'Angina', 'Pulmonary issues'],
+                    'urgent_signs': ['Radiating pain', 'Shortness of breath', 'Sweating', 'Nausea'],
+                    'tests': ['ECG', 'Cardiac enzymes', 'Chest X-ray', 'Stress test']
+                },
+                'abdominal_pain': {
+                    'common_causes': ['Indigestion', 'Irritable bowel', 'Appendicitis', 'Gallstones', 'UTI'],
+                    'urgent_signs': ['Severe pain', 'Fever', 'Vomiting blood', 'Unable to pass stool'],
+                    'tests': ['CBC', 'Liver function tests', 'Ultrasound', 'CT scan']
+                }
+            },
+            'medication_database': {
+                'iron_deficiency': {
+                    'supplements': ['Ferrous sulfate', 'Ferrous gluconate', 'Iron polysaccharide'],
+                    'dosing': '65-200 mg elemental iron daily',
+                    'duration': '3-6 months',
+                    'monitoring': 'Repeat blood tests in 2-3 months'
+                },
+                'hypertension': {
+                    'medications': ['ACE inhibitors', 'Beta blockers', 'Calcium channel blockers', 'Diuretics'],
+                    'lifestyle': 'Low salt diet, exercise, weight management',
+                    'monitoring': 'Regular blood pressure checks'
+                },
+                'diabetes': {
+                    'medications': ['Metformin', 'Insulin', 'GLP-1 agonists', 'SGLT2 inhibitors'],
+                    'monitoring': 'Blood glucose, HbA1c every 3-6 months',
+                    'targets': 'HbA1c < 7%, fasting glucose 80-130 mg/dL'
+                }
             }
         }
 
-    def call_groq_api(self, messages, model=None, max_tokens=800, temperature=0.7):
-        """Make direct API call to Groq with rate limit handling"""
+    def call_groq_api(self, messages, model=None, max_tokens=1000, temperature=0.7):
+        """Make API call to Groq with comprehensive error handling"""
         if not self.api_key:
             return None
         
-        # Use provided model or default
         model_to_use = model or self.current_model
         
-        # Rate limiting - add delay between API calls
+        # Rate limiting
         current_time = time.time()
         time_since_last_call = current_time - st.session_state.last_api_call
         if time_since_last_call < self.rate_limit_delay:
@@ -225,7 +286,6 @@ class MedicalAIAnalyzer:
             "Content-Type": "application/json"
         }
         
-        # Optimize token usage
         data = {
             "messages": messages,
             "model": model_to_use,
@@ -243,24 +303,21 @@ class MedicalAIAnalyzer:
                 result = response.json()
                 return result["choices"][0]["message"]["content"]
             elif response.status_code == 429:
-                # Rate limit exceeded
                 st.session_state.rate_limit_warning = True
-                logger.warning("Rate limit exceeded, using fallback responses")
-                # Increase delay for next calls
+                logger.warning("Rate limit exceeded")
                 self.rate_limit_delay = 5
                 return None
             elif response.status_code == 400:
-                # Model might be deprecated, try fallback
                 error_data = response.json()
                 if "decommissioned" in error_data.get("error", {}).get("message", ""):
-                    logger.warning(f"Model {model_to_use} is decommissioned, trying fallback")
+                    logger.warning(f"Model {model_to_use} deprecated, trying fallback")
                     return self._try_fallback_model(messages, max_tokens, temperature)
                 return None
             else:
-                logger.error(f"Groq API error: {response.status_code} - {response.text}")
+                logger.error(f"API error: {response.status_code}")
                 return None
         except Exception as e:
-            logger.error(f"Groq API call failed: {str(e)}")
+            logger.error(f"API call failed: {str(e)}")
             return None
 
     def _try_fallback_model(self, messages, max_tokens, temperature):
@@ -270,8 +327,7 @@ class MedicalAIAnalyzer:
         
         for model in fallback_models:
             try:
-                # Add delay between fallback attempts
-                time.sleep(2)
+                time.sleep(1)
                 
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {
@@ -292,15 +348,9 @@ class MedicalAIAnalyzer:
                 
                 if response.status_code == 200:
                     result = response.json()
-                    logger.info(f"Successfully used fallback model: {model}")
-                    self.current_model = model  # Switch to this model for future calls
+                    logger.info(f"Using fallback model: {model}")
+                    self.current_model = model
                     return result["choices"][0]["message"]["content"]
-                elif response.status_code == 429:
-                    st.session_state.rate_limit_warning = True
-                    continue
-                elif response.status_code == 400:
-                    # This model is also deprecated, continue to next
-                    continue
             except Exception as e:
                 logger.error(f"Fallback model {model} failed: {str(e)}")
                 continue
@@ -345,220 +395,223 @@ class MedicalAIAnalyzer:
         return all_text
 
     def chat_with_medical_ai(self, message, patient_context="", processed_data=""):
-        """Advanced medical chat using Groq API with intelligent patient context"""
+        """Advanced medical conversation with AI"""
         if not self.api_key or st.session_state.rate_limit_warning:
-            return self._intelligent_fallback_response(message, patient_context, processed_data)
+            return self._professional_medical_response(message, patient_context, processed_data)
         
         try:
-            # Build optimized system prompt
-            system_prompt = f"""You are Dr. MedAI, a medical assistant. Analyze patient data and provide helpful guidance.
+            # Build comprehensive medical context
+            system_prompt = f"""You are Dr. MedAI, an experienced physician and medical AI assistant. You provide professional, evidence-based medical guidance.
 
 PATIENT CONTEXT:
-{patient_context if patient_context else 'No patient info provided'}
+{patient_context}
 
 MEDICAL DATA:
-{processed_data if processed_data else 'No additional medical data'}
+{processed_data}
 
-INSTRUCTIONS:
-- Be specific, practical, and empathetic
-- Analyze any lab results or symptoms mentioned
-- Provide evidence-based advice when possible
-- Suggest appropriate next steps
-- Always recommend consulting healthcare providers
-- Keep responses clear and under 400 words
+CONVERSATION HISTORY:
+{st.session_state.conversation_history[-5:] if st.session_state.conversation_history else 'No previous conversation'}
 
-Focus on being helpful while acknowledging limitations."""
+MEDICAL CONDITIONS IDENTIFIED:
+{st.session_state.medical_conditions}
+
+CURRENT DIAGNOSIS CONSIDERATIONS:
+{st.session_state.current_diagnosis}
+
+TREATMENT PLAN:
+{st.session_state.treatment_plan}
+
+PROFESSIONAL GUIDELINES:
+
+1. CLINICAL ASSESSMENT:
+   - Analyze symptoms systematically
+   - Consider differential diagnoses
+   - Evaluate risk factors
+   - Assess urgency level
+
+2. DIAGNOSTIC APPROACH:
+   - Suggest appropriate tests based on presentation
+   - Interpret lab results in clinical context
+   - Consider imaging when indicated
+   - Review medication interactions
+
+3. TREATMENT RECOMMENDATIONS:
+   - Provide evidence-based treatment options
+   - Discuss lifestyle modifications
+   - Consider medication management
+   - Plan follow-up and monitoring
+
+4. PATIENT EDUCATION:
+   - Explain conditions in understandable terms
+   - Discuss prognosis and expectations
+   - Provide self-management strategies
+   - Emphasize preventive care
+
+5. SAFETY PROTOCOLS:
+   - Identify red flags requiring immediate care
+   - Discuss when to seek emergency help
+   - Review medication safety
+   - Consider contraindications
+
+RESPONSE STYLE:
+- Be professional yet compassionate
+- Use medical terminology appropriately
+- Provide clear explanations
+- Offer practical next steps
+- Always emphasize doctor consultation for definitive care
+
+CURRENT QUERY: {message}"""
 
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message}
             ]
 
-            # Get response from Groq API
-            response = self.call_groq_api(messages, max_tokens=600, temperature=0.7)
+            response = self.call_groq_api(messages, max_tokens=1200, temperature=0.7)
             
             if response:
+                # Update conversation history
+                st.session_state.conversation_history.append(f"Patient: {message}")
+                st.session_state.conversation_history.append(f"Doctor: {response}")
+                
+                # Extract potential medical conditions from response
+                self._extract_medical_insights(response)
+                
                 return response
             else:
-                return self._intelligent_fallback_response(message, patient_context, processed_data)
+                return self._professional_medical_response(message, patient_context, processed_data)
 
         except Exception as e:
             logger.error(f"Medical AI error: {str(e)}")
-            return self._intelligent_fallback_response(message, patient_context, processed_data)
+            return self._professional_medical_response(message, patient_context, processed_data)
 
-    def _intelligent_fallback_response(self, message, patient_context, processed_data):
-        """Provide intelligent fallback responses based on patient context"""
+    def _extract_medical_insights(self, response):
+        """Extract medical conditions and insights from AI response"""
+        # Simple pattern matching for common conditions
+        conditions = []
+        if "iron deficiency" in response.lower() or "anemia" in response.lower():
+            conditions.append("Iron Deficiency Anemia")
+        if "hypertension" in response.lower() or "high blood pressure" in response.lower():
+            conditions.append("Hypertension")
+        if "diabetes" in response.lower() or "blood sugar" in response.lower():
+            conditions.append("Diabetes")
+        if "thyroid" in response.lower():
+            conditions.append("Thyroid Disorder")
+        
+        if conditions:
+            st.session_state.medical_conditions = list(set(st.session_state.medical_conditions + conditions))
+
+    def _professional_medical_response(self, message, patient_context, processed_data):
+        """Provide professional medical responses when AI is unavailable"""
         message_lower = message.lower()
         
-        # Check for specific medical conditions in context
-        has_iron_deficiency = "iron" in patient_context.lower() or "iron" in processed_data.lower()
-        has_lab_data = any(keyword in processed_data.lower() for keyword in ['hemoglobin', 'wbc', 'rbc', 'ferritin', 'glucose'])
+        # Update conversation history
+        st.session_state.conversation_history.append(f"Patient: {message}")
         
-        if any(greet in message_lower for greet in ['hi', 'hello', 'hey']):
-            if has_iron_deficiency:
-                return """👋 Hello! I can see you've mentioned iron deficiency in your information. 
-
-I can help you understand:
-• What your lab results might mean
-• Dietary recommendations for iron
-• Common symptoms and management
-• When to seek medical attention
-
-What specific aspect would you like to discuss?"""
-            else:
-                return """👋 Hello! I'm Dr. MedAI, your medical assistant.
-
-I can help analyze:
-• Medical test results and lab values
-• Symptoms and health concerns
-• Medication questions
-• General health guidance
-
-Please share your medical information or upload reports for personalized analysis."""
-
-        elif any(word in message_lower for word in ['iron', 'deficiency', 'anemia', 'ferritin', 'hemoglobin']):
-            return self._provide_iron_deficiency_analysis(patient_context, processed_data)
+        # Symptom analysis
+        if any(symptom in message_lower for symptom in ['symptom', 'pain', 'hurt', 'feel', 'experience']):
+            response = self._analyze_symptoms_professionally(message_lower, patient_context, processed_data)
         
-        elif any(word in message_lower for word in ['symptom', 'tired', 'fatigue', 'weak', 'dizzy', 'pale']):
-            return self._analyze_symptoms(message_lower, patient_context, processed_data)
+        # Lab results analysis
+        elif any(term in message_lower for term in ['lab', 'test', 'result', 'report', 'blood', 'level']):
+            response = self._analyze_lab_results_professionally(processed_data)
         
-        elif any(word in message_lower for word in ['lab', 'test', 'result', 'report']):
-            return self._analyze_lab_results(processed_data)
+        # Medication questions
+        elif any(term in message_lower for term in ['medication', 'medicine', 'pill', 'drug', 'prescription']):
+            response = self._provide_medication_guidance(message_lower, patient_context)
         
-        elif any(word in message_lower for word in ['diet', 'food', 'nutrition', 'eat']):
-            return self._provide_nutrition_advice(patient_context, processed_data)
+        # Diagnosis questions
+        elif any(term in message_lower for term in ['diagnosis', 'condition', 'disease', 'illness']):
+            response = self._discuss_diagnosis(message_lower, patient_context)
         
-        elif any(word in message_lower for word in ['what', 'how', 'why', 'explain']):
-            return """I'd be happy to help explain medical concepts or test results!
-
-To provide the most helpful information:
-1. Share your specific test results or lab values
-2. Describe your symptoms in detail
-3. Upload any medical reports you have
-4. Tell me about any diagnoses you've received
-
-The more specific information you provide, the better I can assist you."""
+        # Treatment questions
+        elif any(term in message_lower for term in ['treatment', 'cure', 'therapy', 'manage', 'control']):
+            response = self._discuss_treatment(message_lower, patient_context)
         
+        # General health questions
+        elif any(term in message_lower for term in ['health', 'prevent', 'diet', 'exercise', 'lifestyle']):
+            response = self._provide_health_advice(message_lower, patient_context)
+        
+        # Emergency situations
+        elif any(term in message_lower for term in ['emergency', 'urgent', '911', 'hospital', 'severe', 'critical']):
+            response = self._handle_emergency_situation(message_lower)
+        
+        # General conversation
         else:
-            return """I'm here to help with your health questions and concerns.
-
-Please feel free to:
-• Share your medical test results
-• Describe your symptoms
-• Ask about medications or treatments
-• Upload medical reports for analysis
-
-I'll do my best to provide helpful information and guidance based on the data you provide."""
-
-    def _provide_iron_deficiency_analysis(self, patient_context, processed_data):
-        """Provide detailed iron deficiency analysis"""
-        analysis = """🔬 **Iron Deficiency Analysis**
-
-**Understanding Iron Deficiency:**
-Iron deficiency occurs when your body doesn't have enough iron to produce adequate hemoglobin. This can lead to anemia, causing various symptoms.
-
-**Common Symptoms:**
-• Fatigue and weakness
-• Pale skin and conjunctiva
-• Shortness of breath
-• Dizziness or lightheadedness
-• Headaches
-• Cold hands and feet
-
-**Key Laboratory Indicators:**
-"""
+            response = self._general_medical_conversation(message_lower, patient_context)
         
-        # Extract and analyze lab values
-        lab_values = self.extract_lab_values(processed_data)
+        st.session_state.conversation_history.append(f"Doctor: {response}")
+        return response
+
+    def _analyze_symptoms_professionally(self, message, patient_context, processed_data):
+        """Professional symptom analysis"""
+        analysis = """## 🩺 Symptom Analysis
+
+**Clinical Assessment Approach:**
+
+I understand you're experiencing symptoms that concern you. Let me help you analyze this systematically:
+
+### Differential Diagnosis Considerations:"""
+
+        # Add specific symptom analysis based on context
+        if 'fatigue' in message:
+            analysis += """
+**Fatigue Analysis:**
+• **Common Causes**: Iron deficiency, thyroid disorders, sleep issues, nutritional deficiencies
+• **Assessment Needed**: Complete blood count, thyroid panel, iron studies, vitamin levels
+• **Red Flags**: Chest pain, shortness of breath, significant weight loss, fainting"""
         
-        critical_findings = []
-        normal_findings = []
+        if 'headache' in message:
+            analysis += """
+**Headache Analysis:**
+• **Common Types**: Tension headaches, migraines, sinus-related, cluster headaches
+• **Assessment**: Blood pressure, neurological exam, vision check
+• **Urgent Signs**: Sudden severe headache, vision changes, confusion, fever with neck stiffness"""
         
-        if 'Hemoglobin' in lab_values:
-            hb = lab_values['Hemoglobin']
-            if hb < 12.0:
-                critical_findings.append(f"Hemoglobin: {hb} g/dL (LOW - normal range: 12.0-16.0 g/dL)")
-            else:
-                normal_findings.append(f"Hemoglobin: {hb} g/dL (Normal)")
-        
-        if 'Ferritin' in lab_values:
-            ferritin = lab_values['Ferritin']
-            if ferritin < 15:
-                critical_findings.append(f"Ferritin: {ferritin} ng/mL (VERY LOW - indicates iron deficiency)")
-            elif ferritin < 30:
-                critical_findings.append(f"Ferritin: {ferritin} ng/mL (LOW - suggests iron deficiency)")
-            else:
-                normal_findings.append(f"Ferritin: {ferritin} ng/mL (Normal)")
-        
-        if critical_findings:
-            analysis += "\n🚨 **Important Findings:**\n" + "\n".join([f"• {finding}" for finding in critical_findings]) + "\n"
-        
-        if normal_findings:
-            analysis += "\n✅ **Normal Values:**\n" + "\n".join([f"• {finding}" for finding in normal_findings]) + "\n"
+        if 'chest' in message and 'pain' in message:
+            analysis += """
+**Chest Pain Analysis:**
+• **Cardiac Considerations**: Angina, myocardial infarction, pericarditis
+• **Non-Cardiac Causes**: Acid reflux, costochondritis, anxiety, pulmonary issues
+• **Emergency Signs**: Radiating pain, shortness of breath, sweating, nausea"""
         
         analysis += """
-**Recommended Actions:**
 
-1. **Medical Consultation:** Schedule an appointment with your doctor for proper diagnosis
-2. **Laboratory Testing:** Complete iron studies if not already done
-3. **Dietary Changes:** Increase iron-rich foods (red meat, spinach, lentils, fortified cereals)
-4. **Supplementation:** Consider iron supplements if recommended by your doctor
-5. **Follow-up:** Repeat testing in 2-3 months to monitor progress
+### Recommended Next Steps:
 
-**When to Seek Urgent Care:**
-• Severe fatigue preventing daily activities
-• Chest pain or palpitations
-• Shortness of breath at rest
-• Significant dizziness or fainting
+1. **Immediate Actions:**
+   - Monitor symptom patterns and triggers
+   - Keep a symptom diary with timing and severity
+   - Note any associated symptoms
 
-**Important:** Always discuss these findings with your healthcare provider for proper medical advice."""
+2. **Medical Evaluation:**
+   - Schedule appointment with primary care physician
+   - Discuss symptom progression and impact
+   - Review complete medical history
 
+3. **Diagnostic Considerations:**
+   - Basic laboratory testing as indicated
+   - Specialist referral if needed
+   - Imaging studies if clinically warranted
+
+**When to Seek Immediate Care:**
+• Chest pain or pressure
+• Difficulty breathing
+• Severe uncontrolled pain
+• Neurological changes
+• High fever with other symptoms
+
+Would you like me to analyze specific symptoms in more detail or discuss your test results?"""
+        
         return analysis
 
-    def _analyze_symptoms(self, message, patient_context, processed_data):
-        """Analyze patient symptoms"""
-        return """🤒 **Symptom Analysis**
-
-I understand you're experiencing symptoms that concern you. Let me help you understand what they might indicate and what steps to consider.
-
-**Common Symptom Patterns:**
-
-**Fatigue + Weakness:**
-• Iron deficiency anemia (very common)
-• Thyroid disorders
-• Sleep issues or poor sleep quality
-• Vitamin deficiencies (B12, Vitamin D)
-• Chronic fatigue syndrome
-
-**Dizziness + Pale Skin:**
-• Anemia (reduced oxygen delivery)
-• Dehydration or electrolyte imbalance
-• Blood pressure fluctuations
-• Inner ear problems
-
-**Next Steps to Consider:**
-1. **Symptom Tracking:** Keep a diary of when symptoms occur, their severity, and any triggers
-2. **Medical Evaluation:** Schedule an appointment with your primary care physician
-3. **Basic Testing:** Consider complete blood count (CBC), iron studies, and thyroid panel
-4. **Lifestyle Review:** Evaluate sleep patterns, stress levels, diet, and hydration
-
-**Red Flags Requiring Prompt Medical Attention:**
-• Chest pain or pressure
-• Difficulty breathing or shortness of breath
-• Fainting or loss of consciousness
-• Severe, persistent headache
-• Rapid heart rate or palpitations
-
-Would you like to discuss specific symptoms in more detail or share any test results you have?"""
-
-    def _analyze_lab_results(self, processed_data):
-        """Analyze laboratory results"""
+    def _analyze_lab_results_professionally(self, processed_data):
+        """Professional lab results analysis"""
         if not processed_data:
-            return "I don't see any lab results to analyze yet. Please upload your lab reports or paste your test results in the sidebar for detailed analysis."
-        
-        lab_values = self.extract_lab_values(processed_data)
-        
-        if not lab_values:
-            return """I found some medical data but couldn't extract specific lab values. 
+            return """## 🔬 Laboratory Results Analysis
 
-For the most accurate analysis, please paste your results in this format:
+I don't see any laboratory results to analyze yet. 
+
+**To provide comprehensive analysis, please:**
+1. Upload your lab reports (PDF/DOCX/TXT formats)
+2. Or paste your results in this format:
