@@ -163,14 +163,15 @@ class MedicalAIAnalyzer:
     def __init__(self, api_key=None):
         self.api_key = api_key
         self.medical_knowledge_base = self._initialize_medical_knowledge()
-        # Available Groq models - using smaller models to reduce token usage
+        # Updated to current available Groq models
         self.available_models = [
-            "llama-3.2-1b-preview",  # Smallest model for basic responses
-            "llama-3.2-3b-preview",  # Medium model for better analysis
-            "llama-3.1-8b-instant",  # Larger model when available
+            "llama-3.1-8b-instant",  # Primary model
+            "mixtral-8x7b-32768",    # Fallback 1
+            "gemma2-9b-it",          # Fallback 2
+            "llama3-70b-8192"        # Fallback 3 (if available)
         ]
-        self.current_model = "llama-3.2-1b-preview"  # Start with smallest model
-        self.rate_limit_delay = 2  # Base delay between API calls
+        self.current_model = "llama-3.1-8b-instant"  # Start with reliable model
+        self.rate_limit_delay = 3  # Increased delay between API calls
     
     def _initialize_medical_knowledge(self):
         """Initialize comprehensive medical knowledge base"""
@@ -224,12 +225,12 @@ class MedicalAIAnalyzer:
             "Content-Type": "application/json"
         }
         
-        # Optimize token usage by using smaller models and shorter responses
+        # Optimize token usage
         data = {
             "messages": messages,
             "model": model_to_use,
             "temperature": temperature,
-            "max_tokens": max_tokens,  # Reduced from 1500 to 800
+            "max_tokens": max_tokens,
             "top_p": 0.9,
             "stream": False
         }
@@ -245,12 +246,18 @@ class MedicalAIAnalyzer:
                 # Rate limit exceeded
                 st.session_state.rate_limit_warning = True
                 logger.warning("Rate limit exceeded, using fallback responses")
+                # Increase delay for next calls
+                self.rate_limit_delay = 5
+                return None
+            elif response.status_code == 400:
+                # Model might be deprecated, try fallback
+                error_data = response.json()
+                if "decommissioned" in error_data.get("error", {}).get("message", ""):
+                    logger.warning(f"Model {model_to_use} is decommissioned, trying fallback")
+                    return self._try_fallback_model(messages, max_tokens, temperature)
                 return None
             else:
                 logger.error(f"Groq API error: {response.status_code} - {response.text}")
-                # Try fallback model if first attempt fails
-                if model_to_use != self.available_models[-1]:  # If not the last model in list
-                    return self._try_fallback_model(messages, max_tokens, temperature)
                 return None
         except Exception as e:
             logger.error(f"Groq API call failed: {str(e)}")
@@ -258,13 +265,13 @@ class MedicalAIAnalyzer:
 
     def _try_fallback_model(self, messages, max_tokens, temperature):
         """Try alternative models if primary fails"""
-        current_index = self.available_models.index(self.current_model)
+        current_index = self.available_models.index(self.current_model) if self.current_model in self.available_models else 0
         fallback_models = self.available_models[current_index + 1:]
         
         for model in fallback_models:
             try:
                 # Add delay between fallback attempts
-                time.sleep(1)
+                time.sleep(2)
                 
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {
@@ -290,6 +297,9 @@ class MedicalAIAnalyzer:
                     return result["choices"][0]["message"]["content"]
                 elif response.status_code == 429:
                     st.session_state.rate_limit_warning = True
+                    continue
+                elif response.status_code == 400:
+                    # This model is also deprecated, continue to next
                     continue
             except Exception as e:
                 logger.error(f"Fallback model {model} failed: {str(e)}")
@@ -340,31 +350,31 @@ class MedicalAIAnalyzer:
             return self._intelligent_fallback_response(message, patient_context, processed_data)
         
         try:
-            # Build optimized system prompt (shorter to save tokens)
-            system_prompt = f"""You are Dr. MedAI, a medical assistant. Analyze patient data and provide guidance.
+            # Build optimized system prompt
+            system_prompt = f"""You are Dr. MedAI, a medical assistant. Analyze patient data and provide helpful guidance.
 
 PATIENT CONTEXT:
-{patient_context if patient_context else 'No patient info'}
+{patient_context if patient_context else 'No patient info provided'}
 
 MEDICAL DATA:
-{processed_data if processed_data else 'No medical data'}
+{processed_data if processed_data else 'No additional medical data'}
 
 INSTRUCTIONS:
-- Be specific and actionable
-- Analyze lab results and symptoms
-- Provide evidence-based advice
-- Be conversational and empathetic
-- Suggest next steps
-- Always recommend doctor consultation
+- Be specific, practical, and empathetic
+- Analyze any lab results or symptoms mentioned
+- Provide evidence-based advice when possible
+- Suggest appropriate next steps
+- Always recommend consulting healthcare providers
+- Keep responses clear and under 400 words
 
-Keep responses under 500 words. Focus on key insights."""
+Focus on being helpful while acknowledging limitations."""
 
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message}
             ]
 
-            # Get response from Groq API with reduced tokens
+            # Get response from Groq API
             response = self.call_groq_api(messages, max_tokens=600, temperature=0.7)
             
             if response:
@@ -386,23 +396,23 @@ Keep responses under 500 words. Focus on key insights."""
         
         if any(greet in message_lower for greet in ['hi', 'hello', 'hey']):
             if has_iron_deficiency:
-                return """👋 Hello! I can see you've mentioned iron deficiency. 
+                return """👋 Hello! I can see you've mentioned iron deficiency in your information. 
 
 I can help you understand:
-• Your lab results and what they mean
+• What your lab results might mean
 • Dietary recommendations for iron
-• When to seek medical care
-• Questions to ask your doctor
+• Common symptoms and management
+• When to seek medical attention
 
-What would you like to know about iron deficiency?"""
+What specific aspect would you like to discuss?"""
             else:
                 return """👋 Hello! I'm Dr. MedAI, your medical assistant.
 
 I can help analyze:
-• Medical test results
-• Symptoms and concerns  
+• Medical test results and lab values
+• Symptoms and health concerns
 • Medication questions
-• Health guidance
+• General health guidance
 
 Please share your medical information or upload reports for personalized analysis."""
 
@@ -418,641 +428,137 @@ Please share your medical information or upload reports for personalized analysi
         elif any(word in message_lower for word in ['diet', 'food', 'nutrition', 'eat']):
             return self._provide_nutrition_advice(patient_context, processed_data)
         
+        elif any(word in message_lower for word in ['what', 'how', 'why', 'explain']):
+            return """I'd be happy to help explain medical concepts or test results!
+
+To provide the most helpful information:
+1. Share your specific test results or lab values
+2. Describe your symptoms in detail
+3. Upload any medical reports you have
+4. Tell me about any diagnoses you've received
+
+The more specific information you provide, the better I can assist you."""
+        
         else:
-            return """I'd be happy to help with your health questions! 
+            return """I'm here to help with your health questions and concerns.
 
-Please:
-1. Share your specific symptoms or concerns
-2. Upload medical reports or test results  
-3. Describe any diagnoses you've received
+Please feel free to:
+• Share your medical test results
+• Describe your symptoms
+• Ask about medications or treatments
+• Upload medical reports for analysis
 
-The more information you provide, the better I can assist you."""
+I'll do my best to provide helpful information and guidance based on the data you provide."""
 
     def _provide_iron_deficiency_analysis(self, patient_context, processed_data):
         """Provide detailed iron deficiency analysis"""
         analysis = """🔬 **Iron Deficiency Analysis**
 
+**Understanding Iron Deficiency:**
+Iron deficiency occurs when your body doesn't have enough iron to produce adequate hemoglobin. This can lead to anemia, causing various symptoms.
+
 **Common Symptoms:**
 • Fatigue and weakness
-• Pale skin
-• Shortness of breath  
-• Dizziness
+• Pale skin and conjunctiva
+• Shortness of breath
+• Dizziness or lightheadedness
 • Headaches
+• Cold hands and feet
 
-**Key Lab Findings:**
+**Key Laboratory Indicators:**
 """
         
         # Extract and analyze lab values
         lab_values = self.extract_lab_values(processed_data)
         
         critical_findings = []
+        normal_findings = []
+        
         if 'Hemoglobin' in lab_values:
             hb = lab_values['Hemoglobin']
             if hb < 12.0:
-                critical_findings.append(f"Hemoglobin: {hb} g/dL (LOW - indicates anemia)")
+                critical_findings.append(f"Hemoglobin: {hb} g/dL (LOW - normal range: 12.0-16.0 g/dL)")
+            else:
+                normal_findings.append(f"Hemoglobin: {hb} g/dL (Normal)")
         
         if 'Ferritin' in lab_values:
             ferritin = lab_values['Ferritin']
             if ferritin < 15:
-                critical_findings.append(f"Ferritin: {ferritin} ng/mL (VERY LOW - iron deficiency)")
+                critical_findings.append(f"Ferritin: {ferritin} ng/mL (VERY LOW - indicates iron deficiency)")
+            elif ferritin < 30:
+                critical_findings.append(f"Ferritin: {ferritin} ng/mL (LOW - suggests iron deficiency)")
+            else:
+                normal_findings.append(f"Ferritin: {ferritin} ng/mL (Normal)")
         
         if critical_findings:
             analysis += "\n🚨 **Important Findings:**\n" + "\n".join([f"• {finding}" for finding in critical_findings]) + "\n"
         
+        if normal_findings:
+            analysis += "\n✅ **Normal Values:**\n" + "\n".join([f"• {finding}" for finding in normal_findings]) + "\n"
+        
         analysis += """
 **Recommended Actions:**
-1. Consult doctor for proper diagnosis
-2. Consider iron supplements if recommended
-3. Eat iron-rich foods (red meat, spinach, lentils)
-4. Take vitamin C with iron for better absorption
-5. Follow-up testing in 2-3 months
+
+1. **Medical Consultation:** Schedule an appointment with your doctor for proper diagnosis
+2. **Laboratory Testing:** Complete iron studies if not already done
+3. **Dietary Changes:** Increase iron-rich foods (red meat, spinach, lentils, fortified cereals)
+4. **Supplementation:** Consider iron supplements if recommended by your doctor
+5. **Follow-up:** Repeat testing in 2-3 months to monitor progress
 
 **When to Seek Urgent Care:**
 • Severe fatigue preventing daily activities
 • Chest pain or palpitations
-• Shortness of breath at rest"""
-        
+• Shortness of breath at rest
+• Significant dizziness or fainting
+
+**Important:** Always discuss these findings with your healthcare provider for proper medical advice."""
+
         return analysis
 
     def _analyze_symptoms(self, message, patient_context, processed_data):
         """Analyze patient symptoms"""
         return """🤒 **Symptom Analysis**
 
-**Common Causes of Fatigue:**
-• Iron deficiency anemia
-• Thyroid issues  
-• Sleep problems
-• Nutritional deficiencies
+I understand you're experiencing symptoms that concern you. Let me help you understand what they might indicate and what steps to consider.
 
-**Next Steps:**
-1. Track symptoms - timing and severity
-2. Get blood work (CBC, iron, thyroid)
-3. Discuss with your doctor
-4. Review sleep and diet
+**Common Symptom Patterns:**
 
-**Seek Urgent Care for:**
-• Chest pain
-• Difficulty breathing  
-• Fainting
-• Severe headache"""
+**Fatigue + Weakness:**
+• Iron deficiency anemia (very common)
+• Thyroid disorders
+• Sleep issues or poor sleep quality
+• Vitamin deficiencies (B12, Vitamin D)
+• Chronic fatigue syndrome
+
+**Dizziness + Pale Skin:**
+• Anemia (reduced oxygen delivery)
+• Dehydration or electrolyte imbalance
+• Blood pressure fluctuations
+• Inner ear problems
+
+**Next Steps to Consider:**
+1. **Symptom Tracking:** Keep a diary of when symptoms occur, their severity, and any triggers
+2. **Medical Evaluation:** Schedule an appointment with your primary care physician
+3. **Basic Testing:** Consider complete blood count (CBC), iron studies, and thyroid panel
+4. **Lifestyle Review:** Evaluate sleep patterns, stress levels, diet, and hydration
+
+**Red Flags Requiring Prompt Medical Attention:**
+• Chest pain or pressure
+• Difficulty breathing or shortness of breath
+• Fainting or loss of consciousness
+• Severe, persistent headache
+• Rapid heart rate or palpitations
+
+Would you like to discuss specific symptoms in more detail or share any test results you have?"""
 
     def _analyze_lab_results(self, processed_data):
         """Analyze laboratory results"""
         if not processed_data:
-            return "Please upload lab reports or paste test results for analysis."
+            return "I don't see any lab results to analyze yet. Please upload your lab reports or paste your test results in the sidebar for detailed analysis."
         
         lab_values = self.extract_lab_values(processed_data)
         
         if not lab_values:
-            return "Please paste results in format: Hemoglobin: 12.5 g/dL, Ferritin: 25 ng/mL"
-        
-        analysis = "🔬 **Lab Results Analysis**\n\n"
-        
-        abnormal_count = 0
-        for test, value in lab_values.items():
-            if test in self.medical_knowledge_base['lab_ranges']:
-                ranges = self.medical_knowledge_base['lab_ranges'][test]
-                if value < ranges['low']:
-                    analysis += f"⚠️ **{test}**: {value} {ranges['unit']} (LOW)\n"
-                    abnormal_count += 1
-                elif value > ranges['high']:
-                    analysis += f"⚠️ **{test}**: {value} {ranges['unit']} (HIGH)\n"
-                    abnormal_count += 1
-                else:
-                    analysis += f"✅ **{test}**: {value} {ranges['unit']} (Normal)\n"
-        
-        if abnormal_count > 0:
-            analysis += f"\n**{abnormal_count} abnormal values found** - discuss with your doctor."
-        else:
-            analysis += "\n**All values normal** - maintain healthy habits."
-        
-        return analysis
+            return """I found some medical data but couldn't extract specific lab values. 
 
-    def _provide_nutrition_advice(self, patient_context, processed_data):
-        """Provide nutrition advice based on condition"""
-        if "iron" in patient_context.lower() or "iron" in processed_data.lower():
-            return """🍎 **Nutrition for Iron Deficiency**
-
-**Iron-Rich Foods:**
-• Red meat, poultry, fish
-• Spinach, lentils, beans
-• Fortified cereals
-• Pumpkin seeds
-
-**Enhance Absorption:**
-• Vitamin C (citrus, bell peppers)
-• Avoid tea/coffee with meals
-• Cook in cast iron
-
-**Daily Iron Goals:**
-• Men: 8mg • Women: 18mg"""
-        
-        return """🍎 **General Nutrition**
-
-**Healthy Diet:**
-• Vegetables and fruits
-• Lean protein  
-• Whole grains
-• Stay hydrated
-• Limit processed foods"""
-
-    def analyze_patient_data(self, patient_info, medical_history, lab_data, image_description, processed_files_text=""):
-        """Comprehensive analysis of all patient data"""
-        if not self.api_key or st.session_state.rate_limit_warning:
-            return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description, processed_files_text)
-        
-        try:
-            # Combine all data
-            combined_data = f"""
-PATIENT: {patient_info}
-HISTORY: {medical_history}
-LABS: {lab_data}
-NOTES: {image_description}
-FILES: {processed_files_text}
-"""
-
-            prompt = f"""
-            Analyze this patient case briefly:
-
-            {combined_data}
-
-            Provide concise analysis with:
-            - Key findings
-            - Risk assessment  
-            - Recommendations
-            - Urgency level
-
-            Keep under 400 words.
-            """
-
-            messages = [
-                {
-                    "role": "system", 
-                    "content": "You are a physician. Provide concise medical analysis with clear recommendations."
-                },
-                {"role": "user", "content": prompt}
-            ]
-
-            response = self.call_groq_api(messages, max_tokens=500, temperature=0.3)
-            
-            if response:
-                return response
-            else:
-                return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description, processed_files_text)
-                
-        except Exception as e:
-            logger.error(f"Comprehensive analysis failed: {str(e)}")
-            return self._basic_patient_analysis(patient_info, medical_history, lab_data, image_description, processed_files_text)
-
-    def _basic_patient_analysis(self, patient_info, medical_history, lab_data, image_description, processed_files_text):
-        """Basic analysis when AI is unavailable"""
-        analysis = "## 📊 Patient Data Analysis\n\n"
-        
-        analysis += f"**Patient**: {patient_info}\n\n"
-        
-        if medical_history and medical_history.strip():
-            analysis += f"**Medical History**: {medical_history}\n\n"
-        
-        # Analyze lab data
-        combined_lab_data = lab_data + "\n" + processed_files_text
-        lab_values = self.extract_lab_values(combined_lab_data)
-        
-        if lab_values:
-            analysis += "### 🔬 Laboratory Findings\n"
-            abnormal_count = 0
-            for test, value in lab_values.items():
-                if test in self.medical_knowledge_base['lab_ranges']:
-                    ranges = self.medical_knowledge_base['lab_ranges'][test]
-                    if value < ranges['low']:
-                        analysis += f"⚠️ **{test}**: {value} {ranges['unit']} (LOW)\n"
-                        abnormal_count += 1
-                    elif value > ranges['high']:
-                        analysis += f"⚠️ **{test}**: {value} {ranges['unit']} (HIGH)\n"
-                        abnormal_count += 1
-                    else:
-                        analysis += f"✅ **{test}**: {value} {ranges['unit']} (Normal)\n"
-            
-            if abnormal_count > 0:
-                analysis += f"\n**{abnormal_count} abnormal values found.**\n"
-        
-        analysis += "\n### 💡 Recommendations\n"
-        analysis += "1. Review findings with healthcare provider\n"
-        analysis += "2. Discuss any abnormal values\n"
-        analysis += "3. Follow up as recommended\n"
-        
-        return analysis
-
-    def extract_lab_values(self, text):
-        """Extract laboratory values from text"""
-        patterns = {
-            'WBC': r'WBC[\s:\-]*([\d.]+)',
-            'RBC': r'RBC[\s:\-]*([\d.]+)',
-            'Hemoglobin': r'Hemoglobin[\s:\-]*([\d.]+)|Hgb[\s:\-]*([\d.]+)|Hb[\s:\-]*([\d.]+)',
-            'Hematocrit': r'Hematocrit[\s:\-]*([\d.]+)|Hct[\s:\-]*([\d.]+)',
-            'Platelets': r'Platelets[\s:\-]*([\d.]+)',
-            'Glucose': r'Glucose[\s:\-]*([\d.]+)',
-            'Creatinine': r'Creatinine[\s:\-]*([\d.]+)',
-            'BUN': r'BUN[\s:\-]*([\d.]+)',
-            'ALT': r'ALT[\s:\-]*([\d.]+)',
-            'AST': r'AST[\s:\-]*([\d.]+)',
-            'Iron': r'Iron[\s:\-]*([\d.]+)',
-            'Ferritin': r'Ferritin[\s:\-]*([\d.]+)',
-        }
-        
-        extracted_values = {}
-        for test, pattern in patterns.items():
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                for value in match:
-                    if value and value.strip():
-                        try:
-                            extracted_values[test] = float(value)
-                            break
-                        except ValueError:
-                            continue
-        return extracted_values
-
-def setup_groq_api():
-    """Setup Groq API configuration"""
-    st.sidebar.header("🔑 API Configuration")
-    
-    # Check if API key is in Streamlit secrets
-    if 'GROQ_API_KEY' in st.secrets:
-        api_key = st.secrets['GROQ_API_KEY']
-        
-        if not api_key or not api_key.startswith('gsk_'):
-            st.sidebar.markdown("<div class='api-status-disconnected'>❌ Invalid API Key Format</div>", unsafe_allow_html=True)
-            return None
-        
-        # Test the API key
-        try:
-            url = "https://api.groq.com/openai/v1/models"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                st.session_state.api_configured = True
-                st.session_state.api_key = api_key
-                st.sidebar.markdown("<div class='api-status-connected'>✅ Groq API Connected</div>", unsafe_allow_html=True)
-                
-                # Check for rate limit warnings
-                if st.session_state.rate_limit_warning:
-                    st.sidebar.markdown("<div class='rate-limit-warning'>⚠️ Rate limits detected. Using optimized mode.</div>", unsafe_allow_html=True)
-                
-                return api_key
-            else:
-                st.sidebar.markdown("<div class='api-status-disconnected'>❌ API Authentication Failed</div>", unsafe_allow_html=True)
-                return None
-                
-        except Exception as e:
-            st.sidebar.markdown("<div class='api-status-disconnected'>❌ Connection Error</div>", unsafe_allow_html=True)
-    
-    else:
-        st.sidebar.markdown("<div class='api-status-disconnected'>❌ API Key Not Found</div>", unsafe_allow_html=True)
-        st.sidebar.info("""
-        Get Groq API key from https://console.groq.com
-        Add to Streamlit secrets as GROQ_API_KEY
-        """)
-    
-    return None
-
-def setup_sidebar():
-    """Setup the professional medical sidebar"""
-    with st.sidebar:
-        st.markdown("<div class='medical-card'>", unsafe_allow_html=True)
-        st.header("🏥 MediAI Pro")
-        st.markdown("**AI-Powered Medical Assistant**")
-        if st.session_state.api_configured:
-            if st.session_state.rate_limit_warning:
-                st.warning("🤖 AI: **OPTIMIZED MODE**")
-            else:
-                st.success("🤖 AI: **ACTIVE**")
-        else:
-            st.warning("🤖 AI: **BASIC MODE**")
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        st.header("👤 Patient Information")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            patient_id = st.text_input("Patient ID", value="PT-001", key="patient_id")
-            patient_age = st.number_input("Age", min_value=0, max_value=120, value=45, key="patient_age")
-        with col2:
-            patient_name = st.text_input("Patient Name", value="John Doe", key="patient_name")
-            patient_gender = st.selectbox("Gender", ["Male", "Female", "Other"], key="patient_gender")
-        
-        st.header("📋 Medical History")
-        medical_history = st.text_area(
-            "Medical History & Symptoms", 
-            height=100,
-            placeholder="Example: Iron deficiency, fatigue, pale skin...",
-            key="medical_history"
-        )
-        
-        st.header("📁 Medical Data Upload")
-        
-        tab1, tab2 = st.tabs(["Lab Reports", "Medical Notes"])
-        
-        with tab1:
-            st.subheader("Laboratory Results")
-            lab_files = st.file_uploader("Upload Lab Reports", 
-                                       type=['pdf', 'docx', 'txt'], 
-                                       key="lab_uploader",
-                                       accept_multiple_files=True)
-            
-            if lab_files:
-                st.info(f"📎 {len(lab_files)} file(s) uploaded")
-            
-            lab_text_input = st.text_area("Or Paste Lab Results:", height=100,
-                                        placeholder="Hemoglobin: 11.2 g/dL\nFerritin: 12 ng/mL\nWBC: 6.8",
-                                        key="lab_text")
-        
-        with tab2:
-            st.subheader("Medical Notes & Symptoms")
-            image_description = st.text_area("Clinical Notes & Findings:", height=100,
-                                           placeholder="Patient reports fatigue and pale skin.",
-                                           key="image_desc")
-        
-        # Process uploaded files
-        processed_files_text = ""
-        if lab_files:
-            analyzer = MedicalAIAnalyzer(st.session_state.api_key)
-            processed_files_text = analyzer.process_uploaded_files(lab_files)
-            st.session_state.processed_lab_data = processed_files_text
-        
-        # Build patient context
-        patient_context = f"""
-Patient: {patient_name}, {patient_age} years, {patient_gender}
-History: {medical_history if medical_history else 'Not specified'}
-Labs: {lab_text_input if lab_text_input else 'Not provided'}
-Notes: {image_description if image_description else 'Not provided'}
-        """.strip()
-        
-        st.session_state.patient_context = patient_context
-        
-        # Analysis Controls
-        st.markdown("<div class='medical-card'>", unsafe_allow_html=True)
-        st.header("🔍 Analysis Controls")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🚀 **Analyze Patient Data**", use_container_width=True, type="primary"):
-                st.session_state.analyze_clicked = True
-        with col2:
-            if st.button("🔄 **Clear All**", use_container_width=True):
-                st.session_state.analysis_results = {}
-                st.session_state.messages = []
-                st.session_state.analyze_clicked = False
-                st.session_state.processed_lab_data = ""
-                st.session_state.rate_limit_warning = False
-                st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        return {
-            'patient_info': f"ID: {patient_id}, Name: {patient_name}, Age: {patient_age}, Gender: {patient_gender}",
-            'medical_history': medical_history,
-            'lab_data': lab_text_input,
-            'image_description': image_description,
-            'patient_context': patient_context,
-            'processed_files_text': processed_files_text
-        }
-
-def display_medical_chat(analyzer):
-    """Display advanced medical chat interface"""
-    st.header("💬 Dr. MedAI - Medical Conversation Assistant")
-    
-    # API status indicator
-    if st.session_state.api_configured:
-        if st.session_state.rate_limit_warning:
-            st.warning("🟡 AI Assistant: **OPTIMIZED MODE** - Rate limits detected, using efficient responses")
-        else:
-            st.success("✅ AI Assistant: **ACTIVE** - Advanced AI conversations enabled")
-    else:
-        st.warning("🟡 AI Assistant: **BASIC MODE** - Using medical knowledge base")
-    
-    # Rate limit notice
-    if st.session_state.rate_limit_warning:
-        st.markdown("<div class='rate-limit-warning'>⚠️ **Note**: API rate limits detected. Responses are optimized for efficiency. Full AI features will resume when limits reset.</div>", unsafe_allow_html=True)
-    
-    # Patient context summary
-    if st.session_state.patient_context:
-        with st.expander("📋 Current Patient Context", expanded=False):
-            st.text(st.session_state.patient_context)
-    
-    # Chat container
-    st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
-    
-    # Display chat messages
-    for message in st.session_state.messages:
-        if message["role"] == "user":
-            st.markdown(f"<div class='user-message'><strong>You:</strong> {message['content']}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='assistant-message'><strong>Dr. MedAI:</strong> {message['content']}</div>", unsafe_allow_html=True)
-    
-    st.markdown("</div>", unsafe_allow_html=True)
-    
-    # Chat input
-    user_input = st.text_input(
-        "Ask about your medical data, symptoms, or health concerns:",
-        placeholder="Example: Can you explain my iron deficiency results?",
-        key="chat_input"
-    )
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        if st.button("Send Message", use_container_width=True) and user_input:
-            process_user_message(analyzer, user_input)
-    with col2:
-        if st.button("Clear Chat", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
-    
-    # Quick action buttons
-    st.subheader("💡 Quick Medical Questions")
-    quick_col1, quick_col2 = st.columns(2)
-    
-    with quick_col1:
-        if st.button("🤒 Discuss Symptoms", use_container_width=True):
-            process_user_message(analyzer, "I'd like to discuss my symptoms")
-        if st.button("🔬 Analyze Test Results", use_container_width=True):
-            process_user_message(analyzer, "Can you help me understand my medical test results?")
-    
-    with quick_col2:
-        if st.button("🍎 Nutrition Advice", use_container_width=True):
-            process_user_message(analyzer, "What dietary recommendations do you suggest?")
-        if st.button("📋 Next Steps", use_container_width=True):
-            process_user_message(analyzer, "What are the recommended next steps?")
-
-def process_user_message(analyzer, user_input):
-    """Process user message and generate AI response"""
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    
-    # Generate AI response
-    with st.spinner("Dr. MedAI is analyzing..."):
-        ai_response = analyzer.chat_with_medical_ai(
-            user_input, 
-            st.session_state.patient_context,
-            st.session_state.processed_lab_data
-        )
-        
-        # Add AI response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": ai_response})
-    
-    st.rerun()
-
-def display_analysis_dashboard(analyzer, patient_data):
-    """Display professional medical dashboard"""
-    st.header("📊 Medical Analysis Dashboard")
-    
-    if not st.session_state.analysis_results:
-        st.info("""
-        🏥 **Welcome to MediAI Pro**
-        
-        To begin:
-        1. Enter patient information
-        2. Add medical history or test results  
-        3. Upload medical reports
-        4. Click **'Analyze Patient Data'**
-        5. Use chat for questions
-        
-        *More information = Better analysis!*
-        """)
-        return
-    
-    # Summary Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Analysis", "Completed")
-    
-    with col2:
-        st.metric("AI Mode", "Optimized" if st.session_state.rate_limit_warning else "Active")
-    
-    with col3:
-        has_data = any([
-            patient_data['medical_history'], 
-            patient_data['lab_data'], 
-            patient_data['processed_files_text']
-        ])
-        st.metric("Data", "Loaded" if has_data else "Minimal")
-    
-    with col4:
-        lab_values = analyzer.extract_lab_values(patient_data['lab_data'] + patient_data['processed_files_text'])
-        abnormal_count = sum(1 for test, value in lab_values.items() 
-                           if test in analyzer.medical_knowledge_base['lab_ranges'] 
-                           and (value < analyzer.medical_knowledge_base['lab_ranges'][test]['low'] 
-                                or value > analyzer.medical_knowledge_base['lab_ranges'][test]['high']))
-        st.metric("Abnormal Values", abnormal_count if lab_values else "N/A")
-    
-    # Detailed Analysis
-    if 'comprehensive_analysis' in st.session_state.analysis_results:
-        with st.expander("📋 **Patient Analysis**", expanded=True):
-            st.markdown(st.session_state.analysis_results['comprehensive_analysis'])
-
-def create_advanced_visualizations(patient_data, analyzer):
-    """Create professional medical visualizations"""
-    st.header("📈 Health Analytics")
-    
-    # Extract lab values for visualization
-    combined_data = patient_data['lab_data'] + patient_data['processed_files_text']
-    lab_values = analyzer.extract_lab_values(combined_data)
-    
-    if lab_values:
-        st.subheader("🩸 Lab Values Overview")
-        
-        # Prepare data for visualization
-        viz_data = []
-        for test, value in lab_values.items():
-            if test in analyzer.medical_knowledge_base['lab_ranges']:
-                ranges = analyzer.medical_knowledge_base['lab_ranges'][test]
-                status = "Normal"
-                color = "green"
-                if value < ranges['low']:
-                    status = "Low"
-                    color = "blue"
-                elif value > ranges['high']:
-                    status = "High"
-                    color = "red"
-                
-                viz_data.append({
-                    'Parameter': test,
-                    'Value': value,
-                    'Status': status,
-                    'Color': color
-                })
-        
-        if viz_data:
-            df = pd.DataFrame(viz_data)
-            
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=df['Parameter'],
-                    y=df['Value'], 
-                    marker_color=df['Color'],
-                    text=df['Value'],
-                    textposition='auto'
-                )
-            ])
-            
-            fig.update_layout(
-                title='Current Lab Values',
-                yaxis_title='Value',
-                height=400
-            )
-            st.plotly_chart(fig, use_container_width=True)
-    
-    else:
-        st.info("Upload lab reports or enter lab values to see visualizations.")
-
-def main():
-    # Professional Header
-    st.markdown("<h1 class='main-header'>🏥 MediAI Pro</h1>", unsafe_allow_html=True)
-    st.markdown("<h2 class='sub-header'>Intelligent Medical Assistant</h2>", unsafe_allow_html=True)
-    
-    # Setup Groq API
-    api_key = setup_groq_api()
-    
-    # Initialize analyzer with API key
-    analyzer = MedicalAIAnalyzer(api_key)
-    
-    # Setup sidebar and get patient data
-    patient_data = setup_sidebar()
-    
-    # Perform analysis if requested
-    if st.session_state.analyze_clicked:
-        with st.spinner("🔄 Analyzing patient data..."):
-            analysis_results = {}
-            
-            analysis_results['comprehensive_analysis'] = analyzer.analyze_patient_data(
-                patient_data['patient_info'], 
-                patient_data['medical_history'],
-                patient_data['lab_data'],
-                patient_data['image_description'],
-                patient_data['processed_files_text']
-            )
-            
-            st.session_state.analysis_results = analysis_results
-            st.session_state.analyze_clicked = False
-            
-        st.success("✅ Analysis completed!")
-        st.rerun()
-    
-    # Main content tabs
-    tab1, tab2, tab3 = st.tabs(["💬 Medical Chat", "📊 Analysis", "📈 Health Insights"])
-    
-    with tab1:
-        display_medical_chat(analyzer)
-    
-    with tab2:
-        display_analysis_dashboard(analyzer, patient_data)
-    
-    with tab3:
-        create_advanced_visualizations(patient_data, analyzer)
-
-if __name__ == "__main__":
-    main()
+For the most accurate analysis, please paste your results in this format:
