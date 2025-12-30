@@ -1,19 +1,3 @@
-```markdown
-<div align="center">
-
-# MediAI Pro 🤖
-
-![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)
-![Groq](https://img.shields.io/badge/Groq-API-purple.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Version](https://img.shields.io/badge/Version-1.0.0-orange.svg)
-
-**AI-Powered Medical Analysis Platform | Real-time Health Insights | Clinical Decision Support**
-
-[![Live Demo](https://img.shields.io/badge/%F0%9F%9A%80-Live%20Demo-brightgreen)](https://demo.example.com)
-[![Report Bug](https://img.shields.io/badge/%F0%9F%90%9B-Report%20Bug-red)](https://github.com/yourusername/mediai-pro/issues)
-[![Request Feature](https://img.shields.io/badge/%F0%9F%92%A1-Request%20Feature-blue)](https://github.com/yourusername/mediai-pro/issues)
 
 </div>
 
